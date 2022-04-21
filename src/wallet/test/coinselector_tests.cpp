@@ -63,8 +63,7 @@ static void add_coin(const CAmount& nValue, int nInput, CoinSet& set, CAmount fe
     tx.vout[nInput].nValue = nValue;
     tx.nLockTime = nextLockTime++;        // so all transactions get different hashes
     COutput coin(COutPoint(tx.GetHash(), nInput), tx.vout.at(nInput), /*depth=*/ 1, /*input_bytes=*/ -1, /*spendable=*/ true, /*solvable=*/ true, /*safe=*/ true, /*time=*/ 0, /*from_me=*/ false);
-    coin.effective_value = nValue - fee;
-    coin.fee = fee;
+    coin.CalculateEffectiveValue(fee);
     coin.long_term_fee = long_term_fee;
     set.insert(coin);
 }

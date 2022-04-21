@@ -20,6 +20,14 @@ static constexpr CAmount CHANGE_UPPER{1000000};
 
 /** A UTXO under consideration for use in funding a new transaction. */
 struct COutput {
+private:
+    /** The output's value minus fees required to spend it. Initialized as the output's absolute value. */
+    CAmount effective_value;
+
+    /** The fee required to spend this output at the transaction's target feerate. */
+    CAmount fee{0};
+
+public:
     /** The outpoint identifying this UTXO */
     COutPoint outpoint;
 
@@ -55,12 +63,6 @@ struct COutput {
     /** Whether the transaction containing this output is sent from the owning wallet */
     bool from_me;
 
-    /** The output's value minus fees required to spend it. Initialized as the output's absolute value. */
-    CAmount effective_value;
-
-    /** The fee required to spend this output at the transaction's target feerate. */
-    CAmount fee{0};
-
     /** The fee required to spend this output at the consolidation feerate. */
     CAmount long_term_fee{0};
 
@@ -82,6 +84,30 @@ struct COutput {
     bool operator<(const COutput& rhs) const
     {
         return outpoint < rhs.outpoint;
+    }
+
+    CAmount GetEffectiveValue() const
+    {
+        return effective_value;
+    }
+
+    CAmount GetFee() const
+    {
+        return fee;
+    }
+
+    void CalculateEffectiveValue(const CFeeRate& effective_feerate)
+    {
+        /** If input_bytes is unkown(represented as negative), coin_fee is zero*/
+        const CAmount coin_fee = input_bytes < 0 ? 0: effective_feerate.GetFee(input_bytes);
+        fee = coin_fee;
+        effective_value = txout.nValue - coin_fee;
+    }
+    
+    void CalculateEffectiveValue(const CAmount coin_fee)
+    {
+        fee = coin_fee;
+        effective_value = txout.nValue - coin_fee;
     }
 };
 
