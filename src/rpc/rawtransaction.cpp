@@ -27,6 +27,7 @@
 #include <rpc/server.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
+#include <script/descriptor.h>
 #include <script/script.h>
 #include <script/sign.h>
 #include <script/signingprovider.h>
@@ -162,6 +163,33 @@ static std::vector<RPCArg> CreateTxDoc()
         {"replaceable", RPCArg::Type::BOOL, RPCArg::Default{false}, "Marks this transaction as BIP125-replaceable.\n"
                 "Allows this transaction to be replaced by a transaction with higher fees. If provided, it is an error if explicit sequence numbers are incompatible."},
     };
+}
+
+void ProcessDescriptor(const UniValue& request, FlatSigningProvider& expand_keys)
+{
+        const std::string descriptor = request.get_str();
+        FlatSigningProvider keys;
+
+        // Parse descriptor string
+        std::string error;
+        auto parsed_desc = Parse(descriptor, keys, error, /*require_checksum=*/true);
+
+        if (!parsed_desc) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, error);
+        }
+
+        // Range check
+        if (parsed_desc->IsRange())
+        {
+            throw JSONRPCError(RPC_WALLET_ERROR, "Can't use a ranged descriptor to sign a raw transaction");
+        }
+
+        std::vector<CScript> scripts;
+        if (!parsed_desc->Expand(0, keys, scripts, expand_keys)) {
+            throw JSONRPCError(RPC_WALLET_ERROR, "Cannot expand descriptor. Probably because of hardened derivations without private keys provided");
+        }
+        parsed_desc->ExpandPrivate(0, keys, expand_keys);
+
 }
 
 static RPCHelpMan getrawtransaction()
@@ -675,6 +703,106 @@ static RPCHelpMan signrawtransactionwithkey()
 
     UniValue result(UniValue::VOBJ);
     SignTransaction(mtx, &keystore, coins, request.params[3], result);
+    return result;
+},
+    };
+}
+
+static RPCHelpMan signrawtransactionwithdescriptor()
+{
+    return RPCHelpMan{"signrawtransactionwithdescriptor",
+                "\nSign inputs for raw transaction (serialized, hex-encoded).\n"
+                "The second argument is an array of output descriptors\n"
+                "that will be the private information used to sign the transaction.\n"
+                "The third optional argument (may be null) is an array of previous transaction outputs that\n"
+                "this transaction depends on but may not yet be in the block chain.\n",
+                {
+                    {"hexstring", RPCArg::Type::STR, RPCArg::Optional::NO, "The transaction hex string"},
+                    {"descriptors", RPCArg::Type::ARR, RPCArg::Optional::NO, "An array of output script descriptors",
+                        {
+                            {"desc", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "Descriptor string"},
+                        },
+                        },
+                    {"prevtxs", RPCArg::Type::ARR, RPCArg::Optional::OMITTED_NAMED_ARG, "The previous dependent transaction outputs",
+                        {
+                            {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",
+                                {
+                                    {"txid", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction id"},
+                                    {"vout", RPCArg::Type::NUM, RPCArg::Optional::NO, "The output number"},
+                                    {"scriptPubKey", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "script key"},
+                                    {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "(required for Segwit inputs) the amount spent"},
+                                },
+                                },
+                        },
+                        },
+                    {"sighashtype", RPCArg::Type::STR, RPCArg::Default{"DEFAULT for Taproot, ALL otherwise"}, "The signature hash type. Must be one of:\n"
+            "       \"DEFAULT\"\n"
+            "       \"ALL\"\n"
+            "       \"NONE\"\n"
+            "       \"SINGLE\"\n"
+            "       \"ALL|ANYONECANPAY\"\n"
+            "       \"NONE|ANYONECANPAY\"\n"
+            "       \"SINGLE|ANYONECANPAY\"\n"
+                    },
+                },
+                RPCResult{
+                    RPCResult::Type::OBJ, "", "",
+                    {
+                        {RPCResult::Type::STR_HEX, "hex", "The hex-encoded raw transaction with signature(s)"},
+                        {RPCResult::Type::BOOL, "complete", "If the transaction has a complete set of signatures"},
+                        {RPCResult::Type::ARR, "errors", /*optional=*/true, "Script verification errors (if there are any)",
+                        {
+                            {RPCResult::Type::OBJ, "", "",
+                            {
+                                {RPCResult::Type::STR_HEX, "txid", "The hash of the referenced, previous transaction"},
+                                {RPCResult::Type::NUM, "vout", "The index of the output to spent and used as input"},
+                                {RPCResult::Type::ARR, "witness", "",
+                                {
+                                    {RPCResult::Type::STR_HEX, "witness", ""},
+                                }},
+                                {RPCResult::Type::STR_HEX, "scriptSig", "The hex-encoded signature script"},
+                                {RPCResult::Type::NUM, "sequence", "Script sequence number"},
+                                {RPCResult::Type::STR, "error", "Verification or signing error related to the input"},
+                            }},
+                        }},
+                    }
+                },
+                RPCExamples{
+                    HelpExampleCli("signrawtransactionwithdescriptor", "\"myhex\" \"[\\\"descriptor1\\\",\\\"descriptor2\\\"]\"")
+            + HelpExampleRpc("signrawtransactionwithdescriptor", "\"myhex\", \"[\\\"descriptor1\\\",\\\"descriptor2\\\"]\"")
+                },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    RPCTypeCheck(request.params, {UniValue::VSTR, UniValue::VARR, UniValue::VARR, UniValue::VSTR}, true);
+
+    CMutableTransaction mtx;
+    if (!DecodeHexTx(mtx, request.params[0].get_str())) {
+        throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "TX decode failed. Make sure the tx has at least one input.");
+    }
+
+    // Add descriptor information to keystore
+    FlatSigningProvider keystore;
+    const UniValue& descriptors = request.params[1].get_array();
+
+    for (const UniValue& descriptor : descriptors.getValues())
+    {
+        ProcessDescriptor(descriptor, keystore);
+    }
+
+    // Fetch previous transactions
+    std::map<COutPoint, Coin> coins;
+    for (const CTxIn& txin : mtx.vin) {
+        coins[txin.prevout]; // Create empty map entry keyed by prevout.
+    }
+
+    NodeContext& node = EnsureAnyNodeContext(request.context);
+    FindCoins(node, coins);
+
+    ParsePrevouts(request.params[2], /*keystore=*/ nullptr, coins);
+
+    UniValue result(UniValue::VOBJ);
+    SignTransaction(mtx, &keystore, coins, request.params[3], result);
+
     return result;
 },
     };
@@ -1864,6 +1992,7 @@ void RegisterRawTransactionRPCCommands(CRPCTable& t)
         {"rawtransactions", &decodescript},
         {"rawtransactions", &combinerawtransaction},
         {"rawtransactions", &signrawtransactionwithkey},
+        {"rawtransactions", &signrawtransactionwithdescriptor},
         {"rawtransactions", &decodepsbt},
         {"rawtransactions", &combinepsbt},
         {"rawtransactions", &finalizepsbt},
