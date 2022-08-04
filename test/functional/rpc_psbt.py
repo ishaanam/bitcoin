@@ -38,7 +38,10 @@ from test_framework.util import (
     find_vout_for_address,
     random_bytes,
 )
-from test_framework.wallet_util import bytes_to_wif
+from test_framework.wallet_util import (
+    bytes_to_wif,
+    get_generate_key,
+)
 
 import json
 import os
@@ -50,8 +53,8 @@ class PSBTTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 3
         self.extra_args = [
-            ["-walletrbf=1", "-addresstype=bech32", "-changetype=bech32"], #TODO: Remove address type restrictions once taproot has psbt extensions
-            ["-walletrbf=0", "-changetype=legacy"],
+            ["-walletrbf=1", "-addresstype=bech32", "-changetype=bech32", "-txindex"], #TODO: Remove address type restrictions once taproot has psbt extensions
+            ["-walletrbf=0", "-changetype=legacy", "-txindex"],
             []
         ]
         self.supports_cli = False
@@ -577,6 +580,53 @@ class PSBTTest(BitcoinTestFramework):
             if shuffled:
                 break
         assert shuffled
+
+        self.log.info("Test descriptorprocesspsbt updates and signs a psbt with descriptors")
+        key_info = get_generate_key()
+        key1 = key_info[0]
+        wpkh_addr = key_info[5]
+        descriptor1 = descsum_create(f"wpkh({key1})")
+
+        a_key_info = get_generate_key()
+        b_key_info = get_generate_key()
+        c_key_info = get_generate_key()
+        a_key = a_key_info[0]
+        a_pubkey = a_key_info[1]
+        b_key = b_key_info[0]
+        b_pubkey = b_key_info[1]
+        c_pubkey = c_key_info[1]
+
+        descriptor_a = descsum_create(f"wsh(multi(2,{a_key},{b_pubkey},{c_pubkey}))")
+        descriptor_b = descsum_create(f"wsh(multi(2,{a_pubkey},{b_key},{c_pubkey}))")
+        wsh_addr = self.nodes[0].deriveaddresses(descriptor_a)[0]
+
+        txid1 = self.nodes[0].sendtoaddress(wpkh_addr, 1)
+        vout1 = find_output(self.nodes[0], txid1, 1)
+        txid3 = self.nodes[0].sendtoaddress(wsh_addr, 1)
+        vout3 = find_output(self.nodes[0], txid3, 1)
+        self.sync_all()
+
+        psbt = self.nodes[1].createpsbt([{"txid":txid1, "vout":vout1},{"txid":txid2, "vout":vout2},{"txid":txid3, "vout":vout3}], {self.nodes[0].getnewaddress():12.999})
+        decoded = self.nodes[1].decodepsbt(psbt)
+        test_psbt_input_keys(decoded['inputs'][0], [])
+        test_psbt_input_keys(decoded['inputs'][1], [])
+        test_psbt_input_keys(decoded['inputs'][2], [])
+
+        psbt = self.nodes[1].descriptorprocesspsbt(psbt, [descriptor_a])["psbt"]
+        decoded = self.nodes[1].decodepsbt(psbt)
+        test_psbt_input_keys(decoded['inputs'][0], ['witness_utxo', 'non_witness_utxo'])
+        test_psbt_input_keys(decoded['inputs'][1], ['non_witness_utxo'])
+        test_psbt_input_keys(decoded['inputs'][2], ['witness_utxo', 'non_witness_utxo', 'bip32_derivs', 'witness_script', 'partial_signatures'])
+
+        psbt = self.nodes[2].descriptorprocesspsbt(psbt, [descriptor1, descriptor_b], "ALL", False, False)["psbt"]
+        decoded = self.nodes[1].decodepsbt(psbt)
+        test_psbt_input_keys(decoded['inputs'][0], ['witness_utxo', 'non_witness_utxo', 'partial_signatures'])
+        test_psbt_input_keys(decoded['inputs'][1], ['non_witness_utxo'])
+        test_psbt_input_keys(decoded['inputs'][2], ['witness_utxo', 'non_witness_utxo', 'bip32_derivs', 'witness_script', 'partial_signatures'])
+
+        psbt = self.nodes[1].walletprocesspsbt(psbt)["psbt"]
+        rawtx = self.nodes[1].finalizepsbt(psbt)["hex"]
+        self.nodes[1].sendrawtransaction(rawtx)
 
         # Newly created PSBT needs UTXOs and updating
         addr = self.nodes[1].getnewaddress("", "p2sh-segwit")
