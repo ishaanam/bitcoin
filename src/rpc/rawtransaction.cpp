@@ -50,6 +50,7 @@ using node::FindCoins;
 using node::GetTransaction;
 using node::NodeContext;
 using node::PSBTAnalysis;
+using node::ReadBlockFromDisk;
 
 static void TxToJSON(const CTransaction& tx, const uint256 hashBlock, UniValue& entry, Chainstate& active_chainstate)
 {
@@ -270,6 +271,248 @@ static RPCHelpMan getrawtransaction()
     if (blockindex) result.pushKV("in_active_chain", in_active_chain);
     TxToJSON(*tx, hash_block, result, chainman.ActiveChainstate());
     return result;
+},
+    };
+}
+
+int HexToInt(const std::string hex_string)
+{
+	int x;
+	std::stringstream ss;
+	ss << std::hex << hex_string;
+	ss >> x;
+	return x;
+}
+
+std::vector<std::string> GetKeyAndNonce(const NodeContext& node, const CTxIn& tx_in)
+{
+	std::vector<std::string> ret;
+	assert(g_txindex);
+
+	CTransactionRef prev_tx;
+	uint256 block_hash;
+
+	if (!g_txindex->FindTx(tx_in.prevout.hash, block_hash, prev_tx)) {
+		throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Previous transaction not found");
+	}
+
+	CTxOut previous_output = prev_tx->vout.at(tx_in.prevout.n);
+
+	TxoutType type;
+	std::vector<std::vector<uint8_t>> return_values_unused;
+
+	type = Solver(previous_output.scriptPubKey, return_values_unused);
+
+	switch (type) {
+		case TxoutType::WITNESS_V0_KEYHASH: {
+			// Implement later
+			break;
+		}
+		case TxoutType::PUBKEYHASH: {
+			std::stringstream ss{HexStr(tx_in.scriptSig)};
+			for (int i = 0; i < 8; i++) {
+				ss.get();
+			}
+
+			// obtain rvalue length
+			std::string raw_r_len = std::string(1, ss.get());
+			raw_r_len += std::string(1, ss.get());
+
+			std::string r_value{""};
+
+			int r_len = HexToInt(raw_r_len) * 2;
+
+			for (int i = 0; i < r_len; i++) {
+				r_value += ss.get();
+			}
+
+			ret.push_back(r_value);
+
+			// Get the marker for the s value
+			ss.get();
+			ss.get();
+
+			// obtain svalue length
+			std::string raw_s_len = std::string(1, ss.get());
+			raw_s_len += std::string(1, ss.get());
+
+			std::string s_value{""};
+
+			int s_len = HexToInt(raw_s_len) * 2;
+
+			for (int i = 0; i < s_len; i++) {
+				s_value += ss.get();
+			}
+
+			for (int i = 0; i < 4; i++) {
+				ss.get();
+			}
+
+			// Whatever is left should be the public key
+			std::string public_key;
+			std::getline(ss, public_key);
+
+			const std::string pubkey_prefix =  public_key.substr(0, 2);
+			
+			if (pubkey_prefix == "04" || pubkey_prefix == "02" || pubkey_prefix == "03") ret.push_back(public_key);
+
+			break;
+		}
+		default: {
+			break;
+		}
+	}
+	return ret;
+}
+
+struct LevelDBWrapper
+{
+	leveldb::DB* m_db;
+	
+	LevelDBWrapper(const std::string& path)
+	{
+		leveldb::Options options;
+		options.create_if_missing = true;
+
+		leveldb::Status db_status = leveldb::DB::Open(options, path, &m_db);
+
+		if (!db_status.ok()) {
+			throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Unable to open database in: %s \nFatal error: %s", path, db_status.ToString()));
+		}
+	}
+
+	~LevelDBWrapper()
+	{
+		delete m_db;
+		m_db = nullptr;
+	}
+};
+
+struct DatabaseValueEntry
+{
+	std::string public_key{""};
+	std::string txid{""};
+
+	void reset()
+	{
+		public_key = "";
+		txid = "";
+	}
+};
+
+bool operator==(const DatabaseValueEntry& entry_1, const DatabaseValueEntry& entry_2)
+{
+	return entry_1.public_key == entry_2.public_key;
+}
+
+std::vector<DatabaseValueEntry> GetAllValues(const std::string& all_values)
+{
+	std::vector<DatabaseValueEntry> values;
+	std::stringstream ss{all_values};
+
+	DatabaseValueEntry buffer_entry;
+	bool is_key = true;
+	char c;
+
+	while (ss>>c)
+	{
+		if (c == '_') {
+			is_key = true;
+			values.push_back(buffer_entry);
+			buffer_entry.reset();
+		} else if (c == '*') {
+			is_key = false;
+		} else {
+			if (is_key) {
+				buffer_entry.public_key += c;
+			} else {
+				buffer_entry.txid += c;
+			}
+		}
+	}
+
+	return values;
+}
+
+static RPCHelpMan gettxinfo()
+{
+    return RPCHelpMan{
+                "gettxinfo",
+                "Return the raw transaction data.\n"
+
+                "\nBy default, this call only returns a transaction if it is in the mempool. If -txindex is enabled\n"
+                "and no blockhash argument is passed, it will return the transaction if it is in the mempool or any block.\n"
+                "If a blockhash argument is passed, it will return the transaction if\n"
+                "the specified block is available and the transaction is in that block.\n"
+                "\nHint: Use gettransaction for wallet transactions.\n"
+
+                "\nIf verbose is 'true', returns an Object with information about 'txid'.\n"
+                "If verbose is 'false' or omitted, returns a string that is serialized, hex-encoded data for 'txid'.",
+                {},
+                {
+                    RPCResult{
+                         RPCResult::Type::STR, "data", "block hash",
+                     },
+                },
+                RPCExamples{
+                    HelpExampleCli("gettxinfo", "\"mytxid\"")
+            + HelpExampleCli("gettxinfo", "\"mytxid\" true")
+            + HelpExampleRpc("gettxinfo", "\"mytxid\", true")
+            + HelpExampleCli("gettxinfo", "\"mytxid\" false \"myblockhash\"")
+            + HelpExampleCli("gettxinfo", "\"mytxid\" true \"myblockhash\"")
+                },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+	LogPrintf("Starting gettxinfo\n");
+	// Setup database things
+	const std::string database_directory = "/media/ishaana/StuyBitcoin/data/";
+
+	std::unique_ptr<LevelDBWrapper> nonce_db = std::make_unique<LevelDBWrapper>(database_directory + "nonce");
+
+	// Fetch transactions and update databases
+    const NodeContext& node = EnsureAnyNodeContext(request.context);
+    ChainstateManager& chainman = EnsureChainman(node);
+
+    AssertLockHeld(cs_main);
+    node::BlockMap& block_map = chainman.m_blockman.m_block_index;
+	node::BlockMap::iterator it;
+
+	int entries{0};
+
+    UniValue result(UniValue::VSTR);
+
+	for (it = block_map.begin(); it != block_map.end(); ++it) {
+		entries++;
+
+		CBlockIndex* block_index = &it->second;
+		CBlock block;
+		if (ReadBlockFromDisk(block, block_index, chainman.GetConsensus())) {
+			for (const auto& tx : block.vtx) {
+				if (tx->IsCoinBase()) continue;
+				for (const CTxIn& tx_in : tx->vin) {
+					std::vector<std::string> key_and_nonce = GetKeyAndNonce(node, tx_in);
+					if (key_and_nonce.size() == 2)
+					{
+						std::string old_value;
+						leveldb::Status db_status = nonce_db->m_db->Get(leveldb::ReadOptions(), key_and_nonce.at(0), &old_value);
+						if (db_status.ok()) {
+							nonce_db->m_db->Put(leveldb::WriteOptions(), key_and_nonce.at(0), strprintf("%s_%s*%s", old_value, key_and_nonce.at(1), tx->GetHash().GetHex()));
+							LogPrintf("GET_TX_INFO: Found a reused nonce %s in txid %s\n", key_and_nonce.at(0), tx->GetHash().GetHex());
+						} else {
+							nonce_db->m_db->Put(leveldb::WriteOptions(), key_and_nonce.at(0), strprintf("%s*%s", key_and_nonce.at(1), tx->GetHash().GetHex()));
+						}
+					}
+				}
+			}
+			LogPrintf("GET_TX_INFO: Block %s in entry %i searched\n", block.GetHash().GetHex(), entries);
+		} else {
+			throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Could not read block from disk");
+		}
+
+		if (entries == 8064) break;
+	}
+
+	return  result;
 },
     };
 }
@@ -1857,6 +2100,7 @@ void RegisterRawTransactionRPCCommands(CRPCTable& t)
 {
     static const CRPCCommand commands[]{
         {"rawtransactions", &getrawtransaction},
+        {"rawtransactions", &gettxinfo},
         {"rawtransactions", &createrawtransaction},
         {"rawtransactions", &decoderawtransaction},
         {"rawtransactions", &decodescript},
