@@ -1653,7 +1653,7 @@ RPCHelpMan importdescriptors()
     RPCTypeCheck(main_request.params, {UniValue::VARR, UniValue::VOBJ});
 
     WalletRescanReserver reserver(*pwallet);
-    if (!reserver.reserve()) {
+    if (!reserver.reserve(/*with_passphrase=*/true)) {
         throw JSONRPCError(RPC_WALLET_ERROR, "Wallet is currently rescanning. Abort existing rescan or wait.");
     }
 
