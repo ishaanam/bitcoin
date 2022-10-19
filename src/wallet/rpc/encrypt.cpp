@@ -90,6 +90,7 @@ RPCHelpMan walletpassphrase()
     std::weak_ptr<CWallet> weak_wallet = wallet;
     pwallet->chain().rpcRunLater(strprintf("lockwallet(%s)", pwallet->GetName()), [weak_wallet, relock_time] {
         if (auto shared_wallet = weak_wallet.lock()) {
+            LOCK(shared_wallet->m_relock_mutex);
             LOCK(shared_wallet->cs_wallet);
             // Skip if this is not the most recent rpcRunLater callback.
             if (shared_wallet->nRelockTime != relock_time) return;

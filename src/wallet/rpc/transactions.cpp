@@ -875,6 +875,7 @@ RPCHelpMan rescanblockchain()
     uint256 start_block;
 
     EnsureWalletIsUnlocked(*pwallet);
+    LOCK(pwallet->m_relock_mutex);
     {
         LOCK(pwallet->cs_wallet);
         int tip_height = pwallet->GetLastBlockHeight();
