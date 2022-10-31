@@ -5,6 +5,11 @@
 #ifndef BITCOIN_NODE_TRANSACTION_H
 #define BITCOIN_NODE_TRANSACTION_H
 
+#include <atomic>
+
+#include <dbwrapper.h>
+#include <sync.h>
+#include <node/context.h>
 #include <policy/feerate.h>
 #include <primitives/transaction.h>
 #include <util/error.h>
@@ -16,6 +21,164 @@ struct Params;
 }
 
 namespace node {
+    class RescanManager;
+}
+
+struct LevelDBWrapper
+{
+protected:
+	leveldb::DB* m_db;
+
+public:
+	LevelDBWrapper(const std::string& path)
+	{
+		leveldb::Options options;
+		options.create_if_missing = true;
+
+		leveldb::Status db_status = leveldb::DB::Open(options, path, &m_db);
+
+		if (!db_status.ok()) {
+            throw std::runtime_error(strprintf("Unable to open database in: %s \nFatal error: %s", path, db_status.ToString()));
+		}
+	}
+
+    LevelDBWrapper(LevelDBWrapper&& other) = delete;
+    LevelDBWrapper(const LevelDBWrapper&) = delete;
+
+	~LevelDBWrapper()
+	{
+		delete m_db;
+		m_db = nullptr;
+	}
+};
+
+// New databse format: 
+// DB #1: [{nonce : [{txid: vin_pubkey}]}..]
+// DB #2: [{height: [nonce..]}..]
+
+class NonceDB : public LevelDBWrapper
+{
+private:
+    struct NonceInfo
+    {
+        std::string txid {""};
+        std::string vin {""};
+        std::string pub_key {""};
+
+        void reset() {
+            txid = "";
+            vin = "";
+            pub_key = "";
+        }
+    };
+    // Example: txid:vin_pubkey*txid:vin_pubkey...
+    std::vector<NonceInfo> ParseNonceValueList(const std::string& list_string) 
+    {
+        std::vector<NonceInfo> nonce_info_vector;
+        std::stringstream ss{list_string};
+
+        char c;
+        NonceInfo tmp_nonce_info;
+        std::string* next_string = &tmp_nonce_info.txid;
+
+        while (ss>>c) {
+            switch (c) {
+                case ('*') : {
+                    nonce_info_vector.push_back(tmp_nonce_info);
+                    tmp_nonce_info.reset();
+                    next_string = &tmp_nonce_info.txid;
+                    break;
+                } case (':') : {
+                    next_string = &tmp_nonce_info.vin;
+                    break;
+                } case ('_') : {
+                    next_string = &tmp_nonce_info.pub_key;
+                    break;
+                } default : {
+                    *next_string += c;
+                    break;
+                }
+            }
+        }
+
+        nonce_info_vector.push_back(tmp_nonce_info);
+
+        return nonce_info_vector;
+    }
+public:
+    NonceDB(const std::string& path) 
+        : LevelDBWrapper(path)
+    {}
+
+    bool Process(const uint256& txid, const int& vin, const std::string& nonce, const std::string& public_key);
+};
+
+namespace node {
+
+class NonceRescanReserver;
+
+class RescanManager
+{
+private:
+    std::atomic<bool> m_rescanning{false};
+    std::atomic<bool> m_abort_rescan{false};
+    friend class NonceRescanReserver;
+
+    std::unique_ptr<NonceDB> m_nonce_db GUARDED_BY(m_rescan_mutex);
+
+public:
+    Mutex m_rescan_mutex;
+
+    bool IsRescanning() {
+        return m_rescanning;
+    }
+
+    RescanManager(const std::string& nonce_db_path)
+    {
+        LOCK(m_rescan_mutex);
+        m_nonce_db = std::make_unique<NonceDB>(nonce_db_path);
+    }
+
+    // Returns the height of the last successfully scanned block
+    int RunScan(const uint256& start_block, int start_height, const NonceRescanReserver& reserver, const NodeContext& node) EXCLUSIVE_LOCKS_REQUIRED(m_rescan_mutex);
+
+    bool IsScanning() const { return m_rescanning; }
+    bool IsAbortingRescan() const { return m_abort_rescan; }
+
+    void AbortRescan() {
+        m_abort_rescan.exchange(true);
+    }
+};
+
+// Modeled after WalletRescanReserver
+class NonceRescanReserver
+{
+private:
+    RescanManager& m_rescan_manager;
+    bool m_could_reserve;
+public:
+    explicit NonceRescanReserver(RescanManager& rescan_manager) : m_rescan_manager(rescan_manager), m_could_reserve(false) {}
+
+    bool reserve()
+    {
+        assert(!m_could_reserve);
+        m_could_reserve = true;
+        return !m_rescan_manager.m_rescanning.exchange(true);
+    }
+
+    bool isReserved() const
+    {
+        return (m_could_reserve && m_rescan_manager.m_rescanning);
+    }
+
+    ~NonceRescanReserver()
+    {
+        if (m_could_reserve) {
+            m_rescan_manager.m_rescanning = false;
+        }
+    }
+};
+
 struct NodeContext;
 
 /** Maximum fee rate for sendrawtransaction and testmempoolaccept RPC calls.
