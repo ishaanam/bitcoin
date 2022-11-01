@@ -45,6 +45,7 @@
 #include <node/mempool_args.h>
 #include <node/mempool_persist_args.h>
 #include <node/miner.h>
+#include <node/transaction.h>
 #include <node/txreconciliation.h>
 #include <node/validation_cache_args.h>
 #include <policy/feerate.h>
@@ -1565,6 +1566,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         if (!g_txindex->Start()) {
             return false;
         }
+        node.rescan_man = std::make_shared<node::RescanManager>("/media/ishaana/StuyBitcoin/data/nonce");
     }
 
     for (const auto& filter_type : g_enabled_filter_types) {

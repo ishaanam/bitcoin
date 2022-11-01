@@ -49,7 +49,9 @@ using node::AnalyzePSBT;
 using node::FindCoins;
 using node::GetTransaction;
 using node::NodeContext;
+using node::NonceRescanReserver;
 using node::PSBTAnalysis;
+using node::RescanManager;
 
 static void TxToJSON(const CTransaction& tx, const uint256 hashBlock, UniValue& entry, Chainstate& active_chainstate)
 {
@@ -1849,10 +1851,98 @@ static RPCHelpMan analyzepsbt()
     };
 }
 
+/*
+static RPCHelpMan findnoncereuse();
+// When a nonce/pk pair is encountered:
+//  - have we seen a nonce w/ the same pk before?
+//      - yes: log this to debug.log && write this to the database
+//      - no: we already have the ability to calculate it, so don't do anything
+// Some notes:
+//  - it is important to do this in order of the blocks
+//  - use the `rescanblockchain` lower level stuff as an example
+
+// New databse format: 
+// DB #1: [{nonce : [{txid: vin_pubkey}]}..]
+// DB #2: [{height: [nonce..]}..]
+
+static RPCHelpMan stopreusescan();
+// Need to note the last successfully searched block
+
+// Pre:
+    // instantiate a RescanManager when Bitcoin Core starts running (std::shared_ptr) [DONE]
+// Steps:
+    // Instantiate a RescanReserver object, with the RescanManager as the only arg
+    // First, ensure that another rescan is not occuring rn
+    // Initiate the scan
+*/
+
+static RPCHelpMan findnoncereuse()
+{
+    return RPCHelpMan{
+                "findnoncereuse",
+                "Return the raw transaction data.\n",
+                {},
+                RPCResult{
+                    RPCResult::Type::OBJ, "", "",
+                    {
+                        {RPCResult::Type::NUM, "stop_height", "The height of the last rescanned block. May be null in rare cases if there was a reorg and the call didn't scan any blocks because they were already scanned in the background."},
+                    }
+                },
+                RPCExamples{
+                    HelpExampleCli("findnoncereuse", "\"mytxid\"")
+                },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    const NodeContext& node = EnsureAnyNodeContext(request.context);
+
+    if (!node.rescan_man) throw JSONRPCError(RPC_MISC_ERROR, "txindex must be enabled to use this RPC");
+
+    NonceRescanReserver reserver(*node.rescan_man);
+    int start_height = 0;
+    const std::optional<int> tip_height = node.chain->getHeight();
+    assert(tip_height);
+
+    uint256 start_hash = node.chain->getBlockHash(start_height);
+    if (!reserver.reserve()) throw JSONRPCError(RPC_MISC_ERROR, "A rescan is already in progress.");
+
+    LOCK(node.rescan_man->m_rescan_mutex);
+    int last_completed_height = node.rescan_man->RunScan(start_hash, start_height, reserver, node);
+    UniValue response(UniValue::VOBJ);
+    response.pushKV("stop_height", last_completed_height);
+    return response;
+},
+    };
+}
+
+RPCHelpMan abortnoncescan()
+{
+    return RPCHelpMan{"abortnoncescan",
+                "",
+                {},
+                RPCResult{RPCResult::Type::BOOL, "", "Whether the abort was successful"},
+                RPCExamples{
+            HelpExampleRpc("abortnoncescan", "")
+                },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    const NodeContext& node = EnsureAnyNodeContext(request.context);
+    if (!node.rescan_man) throw JSONRPCError(RPC_MISC_ERROR, "txindex must be enabled to use this RPC");
+
+    if (!node.rescan_man->IsScanning()) throw JSONRPCError(RPC_MISC_ERROR, "A nonce reuse scan is not currently in progress.");
+    if (node.rescan_man->IsAbortingRescan()) throw JSONRPCError(RPC_MISC_ERROR, "Already aborting the rescan");
+
+    node.rescan_man->AbortRescan();
+    return true;
+},
+    };
+}
+
 void RegisterRawTransactionRPCCommands(CRPCTable& t)
 {
     static const CRPCCommand commands[]{
         {"rawtransactions", &getrawtransaction},
+        {"rawtransactions", &findnoncereuse},
+        {"rawtransactions", &abortnoncescan},
         {"rawtransactions", &createrawtransaction},
         {"rawtransactions", &decoderawtransaction},
         {"rawtransactions", &decodescript},
