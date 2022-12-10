@@ -414,10 +414,7 @@ def test_watchonly_psbt(self, peer_node, rbf_node, dest_address):
         "internal": True,
         "keypool": False
     }]
-    if self.options.descriptors:
-        result = signer.importdescriptors(reqs)
-    else:
-        result = signer.importmulti(reqs)
+    result = signer.importdescriptors(reqs)
     assert_equal(result, [{'success': True}, {'success': True}])
 
     # Create another wallet with just the public keys, which creates PSBTs
@@ -442,10 +439,7 @@ def test_watchonly_psbt(self, peer_node, rbf_node, dest_address):
         "watchonly": True,
         "active": True,
     }]
-    if self.options.descriptors:
-        result = watcher.importdescriptors(reqs)
-    else:
-        result = watcher.importmulti(reqs)
+    result = watcher.importdescriptors(reqs)
     assert_equal(result, [{'success': True}, {'success': True}])
 
     funding_address1 = watcher.getnewaddress(address_type='bech32')

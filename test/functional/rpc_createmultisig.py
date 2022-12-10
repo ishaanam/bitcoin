@@ -50,10 +50,6 @@ class RpcCreateMultiSigTest(BitcoinTestFramework):
         node0, node1, node2 = self.nodes
         self.wallet = MiniWallet(test_node=node0)
 
-        if self.is_bdb_compiled():
-            self.import_deterministic_coinbase_privkeys()
-            self.check_addmultisigaddress_errors()
-
         self.log.info('Generating blocks ...')
         self.generate(self.wallet, 149)
 
@@ -117,21 +113,6 @@ class RpcCreateMultiSigTest(BitcoinTestFramework):
 
         # Check that bech32m is currently not allowed
         assert_raises_rpc_error(-5, "createmultisig cannot create bech32m multisig addresses", self.nodes[0].createmultisig, 2, self.pub, "bech32m")
-
-    def check_addmultisigaddress_errors(self):
-        if self.options.descriptors:
-            return
-        self.log.info('Check that addmultisigaddress fails when the private keys are missing')
-        addresses = [self.nodes[1].getnewaddress(address_type='legacy') for _ in range(2)]
-        assert_raises_rpc_error(-5, 'no full public key for address', lambda: self.nodes[0].addmultisigaddress(nrequired=1, keys=addresses))
-        for a in addresses:
-            # Importing all addresses should not change the result
-            self.nodes[0].importaddress(a)
-        assert_raises_rpc_error(-5, 'no full public key for address', lambda: self.nodes[0].addmultisigaddress(nrequired=1, keys=addresses))
-
-        # Bech32m address type is disallowed for legacy wallets
-        pubs = [self.nodes[1].getaddressinfo(addr)["pubkey"] for addr in addresses]
-        assert_raises_rpc_error(-5, "Bech32m multisig addresses cannot be created with legacy wallets", self.nodes[0].addmultisigaddress, 2, pubs, "", "bech32m")
 
     def checkbalances(self):
         node0, node1, node2 = self.nodes

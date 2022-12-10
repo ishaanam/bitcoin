@@ -231,10 +231,6 @@ class PSBTTest(BitcoinTestFramework):
         p2sh = wmulti.addmultisigaddress(2, [pubkey0, pubkey1, pubkey2], "", "legacy")['address']
         p2wsh = wmulti.addmultisigaddress(2, [pubkey0, pubkey1, pubkey2], "", "bech32")['address']
         p2sh_p2wsh = wmulti.addmultisigaddress(2, [pubkey0, pubkey1, pubkey2], "", "p2sh-segwit")['address']
-        if not self.options.descriptors:
-            wmulti.importaddress(p2sh)
-            wmulti.importaddress(p2wsh)
-            wmulti.importaddress(p2sh_p2wsh)
         p2wpkh = self.nodes[1].getnewaddress("", "bech32")
         p2pkh = self.nodes[1].getnewaddress("", "legacy")
         p2sh_p2wpkh = self.nodes[1].getnewaddress("", "p2sh-segwit")
@@ -706,10 +702,7 @@ class PSBTTest(BitcoinTestFramework):
 
         # Make a weird but signable script. sh(wsh(pkh())) descriptor accomplishes this
         desc = descsum_create("sh(wsh(pkh({})))".format(privkey))
-        if self.options.descriptors:
-            res = self.nodes[0].importdescriptors([{"desc": desc, "timestamp": "now"}])
-        else:
-            res = self.nodes[0].importmulti([{"desc": desc, "timestamp": "now"}])
+        res = self.nodes[0].importdescriptors([{"desc": desc, "timestamp": "now"}])
         assert res[0]["success"]
         addr = self.nodes[0].deriveaddresses(desc)[0]
         addr_info = self.nodes[0].getaddressinfo(addr)
@@ -795,10 +788,7 @@ class PSBTTest(BitcoinTestFramework):
         assert_equal(psbt2["fee"], psbt3["fee"])
 
         # Import the external utxo descriptor so that we can sign for it from the test wallet
-        if self.options.descriptors:
-            res = wallet.importdescriptors([{"desc": desc, "timestamp": "now"}])
-        else:
-            res = wallet.importmulti([{"desc": desc, "timestamp": "now"}])
+        res = wallet.importdescriptors([{"desc": desc, "timestamp": "now"}])
         assert res[0]["success"]
         # The provided weight should override the calculated weight for a wallet input
         psbt3 = wallet.walletcreatefundedpsbt(
@@ -817,10 +807,7 @@ class PSBTTest(BitcoinTestFramework):
         privkey = bytes_to_wif(eckey.get_bytes())
 
         desc = descsum_create("wsh(pkh({}))".format(eckey.get_pubkey().get_bytes().hex()))
-        if self.options.descriptors:
-            res = watchonly.importdescriptors([{"desc": desc, "timestamp": "now"}])
-        else:
-            res = watchonly.importmulti([{"desc": desc, "timestamp": "now"}])
+        res = watchonly.importdescriptors([{"desc": desc, "timestamp": "now"}])
         assert res[0]["success"]
         addr = self.nodes[0].deriveaddresses(desc)[0]
         self.nodes[0].sendtoaddress(addr, 10)
@@ -832,49 +819,48 @@ class PSBTTest(BitcoinTestFramework):
         self.nodes[0].sendrawtransaction(self.nodes[0].finalizepsbt(psbt)["hex"])
 
         # Same test but for taproot
-        if self.options.descriptors:
-            eckey = ECKey()
-            eckey.generate()
-            privkey = bytes_to_wif(eckey.get_bytes())
+        eckey = ECKey()
+        eckey.generate()
+        privkey = bytes_to_wif(eckey.get_bytes())
 
-            desc = descsum_create("tr({},pk({}))".format(H_POINT, eckey.get_pubkey().get_bytes().hex()))
-            res = watchonly.importdescriptors([{"desc": desc, "timestamp": "now"}])
-            assert res[0]["success"]
-            addr = self.nodes[0].deriveaddresses(desc)[0]
-            self.nodes[0].sendtoaddress(addr, 10)
-            self.generate(self.nodes[0], 1)
-            self.nodes[0].importdescriptors([{"desc": descsum_create("tr({})".format(privkey)), "timestamp":"now"}])
+        desc = descsum_create("tr({},pk({}))".format(H_POINT, eckey.get_pubkey().get_bytes().hex()))
+        res = watchonly.importdescriptors([{"desc": desc, "timestamp": "now"}])
+        assert res[0]["success"]
+        addr = self.nodes[0].deriveaddresses(desc)[0]
+        self.nodes[0].sendtoaddress(addr, 10)
+        self.generate(self.nodes[0], 1)
+        self.nodes[0].importdescriptors([{"desc": descsum_create("tr({})".format(privkey)), "timestamp":"now"}])
 
-            psbt = watchonly.sendall([wallet.getnewaddress(), addr])["psbt"]
-            psbt = self.nodes[0].walletprocesspsbt(psbt)["psbt"]
-            txid = self.nodes[0].sendrawtransaction(self.nodes[0].finalizepsbt(psbt)["hex"])
-            vout = find_vout_for_address(self.nodes[0], txid, addr)
+        psbt = watchonly.sendall([wallet.getnewaddress(), addr])["psbt"]
+        psbt = self.nodes[0].walletprocesspsbt(psbt)["psbt"]
+        txid = self.nodes[0].sendrawtransaction(self.nodes[0].finalizepsbt(psbt)["hex"])
+        vout = find_vout_for_address(self.nodes[0], txid, addr)
 
-            # Make sure tap tree is in psbt
-            parsed_psbt = PSBT.from_base64(psbt)
-            assert_greater_than(len(parsed_psbt.o[vout].map[PSBT_OUT_TAP_TREE]), 0)
-            assert "taproot_tree" in self.nodes[0].decodepsbt(psbt)["outputs"][vout]
-            parsed_psbt.make_blank()
-            comb_psbt = self.nodes[0].combinepsbt([psbt, parsed_psbt.to_base64()])
-            assert_equal(comb_psbt, psbt)
+        # Make sure tap tree is in psbt
+        parsed_psbt = PSBT.from_base64(psbt)
+        assert_greater_than(len(parsed_psbt.o[vout].map[PSBT_OUT_TAP_TREE]), 0)
+        assert "taproot_tree" in self.nodes[0].decodepsbt(psbt)["outputs"][vout]
+        parsed_psbt.make_blank()
+        comb_psbt = self.nodes[0].combinepsbt([psbt, parsed_psbt.to_base64()])
+        assert_equal(comb_psbt, psbt)
 
-            self.log.info("Test that walletprocesspsbt both updates and signs a non-updated psbt containing Taproot inputs")
-            addr = self.nodes[0].getnewaddress("", "bech32m")
-            txid = self.nodes[0].sendtoaddress(addr, 1)
-            vout = find_vout_for_address(self.nodes[0], txid, addr)
-            psbt = self.nodes[0].createpsbt([{"txid": txid, "vout": vout}], [{self.nodes[0].getnewaddress(): 0.9999}])
-            signed = self.nodes[0].walletprocesspsbt(psbt)
-            rawtx = self.nodes[0].finalizepsbt(signed["psbt"])["hex"]
-            self.nodes[0].sendrawtransaction(rawtx)
-            self.generate(self.nodes[0], 1)
+        self.log.info("Test that walletprocesspsbt both updates and signs a non-updated psbt containing Taproot inputs")
+        addr = self.nodes[0].getnewaddress("", "bech32m")
+        txid = self.nodes[0].sendtoaddress(addr, 1)
+        vout = find_vout_for_address(self.nodes[0], txid, addr)
+        psbt = self.nodes[0].createpsbt([{"txid": txid, "vout": vout}], [{self.nodes[0].getnewaddress(): 0.9999}])
+        signed = self.nodes[0].walletprocesspsbt(psbt)
+        rawtx = self.nodes[0].finalizepsbt(signed["psbt"])["hex"]
+        self.nodes[0].sendrawtransaction(rawtx)
+        self.generate(self.nodes[0], 1)
 
-            # Make sure tap tree is not in psbt
-            parsed_psbt = PSBT.from_base64(psbt)
-            assert PSBT_OUT_TAP_TREE not in parsed_psbt.o[0].map
-            assert "taproot_tree" not in self.nodes[0].decodepsbt(psbt)["outputs"][0]
-            parsed_psbt.make_blank()
-            comb_psbt = self.nodes[0].combinepsbt([psbt, parsed_psbt.to_base64()])
-            assert_equal(comb_psbt, psbt)
+        # Make sure tap tree is not in psbt
+        parsed_psbt = PSBT.from_base64(psbt)
+        assert PSBT_OUT_TAP_TREE not in parsed_psbt.o[0].map
+        assert "taproot_tree" not in self.nodes[0].decodepsbt(psbt)["outputs"][0]
+        parsed_psbt.make_blank()
+        comb_psbt = self.nodes[0].combinepsbt([psbt, parsed_psbt.to_base64()])
+        assert_equal(comb_psbt, psbt)
 
         self.log.info("Test decoding PSBT with per-input preimage types")
         # note that the decodepsbt RPC doesn't check whether preimages and hashes match

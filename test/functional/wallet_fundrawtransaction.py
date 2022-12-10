@@ -555,8 +555,6 @@ class RawTransactionsTest(BitcoinTestFramework):
                 addr2Obj['pubkey'],
             ]
         )['address']
-        if not self.options.descriptors:
-            wmulti.importaddress(mSigObj)
 
         # Send 1.2 BTC to msig addr.
         self.nodes[0].sendtoaddress(mSigObj, 1.2)
@@ -582,20 +580,19 @@ class RawTransactionsTest(BitcoinTestFramework):
 
         self.nodes[1].encryptwallet("test")
 
-        if self.options.descriptors:
-            self.nodes[1].walletpassphrase('test', 10)
-            self.nodes[1].importdescriptors([{
-                'desc': descsum_create('wpkh(tprv8ZgxMBicQKsPdYeeZbPSKd2KYLmeVKtcFA7kqCxDvDR13MQ6us8HopUR2wLcS2ZKPhLyKsqpDL2FtL73LMHcgoCL7DXsciA8eX8nbjCR2eG/0h/*h)'),
-                'timestamp': 'now',
-                'active': True
-            },
-            {
-                'desc': descsum_create('wpkh(tprv8ZgxMBicQKsPdYeeZbPSKd2KYLmeVKtcFA7kqCxDvDR13MQ6us8HopUR2wLcS2ZKPhLyKsqpDL2FtL73LMHcgoCL7DXsciA8eX8nbjCR2eG/1h/*h)'),
-                'timestamp': 'now',
-                'active': True,
-                'internal': True
-            }])
-            self.nodes[1].walletlock()
+        self.nodes[1].walletpassphrase('test', 10)
+        self.nodes[1].importdescriptors([{
+            'desc': descsum_create('wpkh(tprv8ZgxMBicQKsPdYeeZbPSKd2KYLmeVKtcFA7kqCxDvDR13MQ6us8HopUR2wLcS2ZKPhLyKsqpDL2FtL73LMHcgoCL7DXsciA8eX8nbjCR2eG/0h/*h)'),
+            'timestamp': 'now',
+            'active': True
+        },
+        {
+            'desc': descsum_create('wpkh(tprv8ZgxMBicQKsPdYeeZbPSKd2KYLmeVKtcFA7kqCxDvDR13MQ6us8HopUR2wLcS2ZKPhLyKsqpDL2FtL73LMHcgoCL7DXsciA8eX8nbjCR2eG/1h/*h)'),
+            'timestamp': 'now',
+            'active': True,
+            'internal': True
+        }])
+        self.nodes[1].walletlock()
 
         # Drain the keypool.
         self.nodes[1].getnewaddress()
@@ -722,10 +719,7 @@ class RawTransactionsTest(BitcoinTestFramework):
             "range": [0, 100],
             "watchonly": True,
         }]
-        if self.options.descriptors:
-            wwatch.importdescriptors(desc_import)
-        else:
-            wwatch.importmulti(desc_import)
+        wwatch.importdescriptors(desc_import)
 
         # Backward compatibility test (2nd params is includeWatching)
         result = wwatch.fundrawtransaction(rawtx, True)
@@ -1003,10 +997,7 @@ class RawTransactionsTest(BitcoinTestFramework):
 
         # Make a weird but signable script. sh(pkh()) descriptor accomplishes this
         desc = descsum_create("sh(pkh({}))".format(privkey))
-        if self.options.descriptors:
-            res = self.nodes[0].importdescriptors([{"desc": desc, "timestamp": "now"}])
-        else:
-            res = self.nodes[0].importmulti([{"desc": desc, "timestamp": "now"}])
+        res = self.nodes[0].importdescriptors([{"desc": desc, "timestamp": "now"}])
         assert res[0]["success"]
         addr = self.nodes[0].deriveaddresses(desc)[0]
         addr_info = self.nodes[0].getaddressinfo(addr)
