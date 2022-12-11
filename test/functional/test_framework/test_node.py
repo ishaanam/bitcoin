@@ -763,9 +763,6 @@ class RPCOverloadWrapper():
         return self.__getattr__('createwallet')(wallet_name, disable_private_keys, blank, passphrase, avoid_reuse, descriptors, load_on_startup, external_signer)
 
     def importprivkey(self, privkey, label=None, rescan=None):
-        wallet_info = self.getwalletinfo()
-        if 'descriptors' not in wallet_info or ('descriptors' in wallet_info and not wallet_info['descriptors']):
-            return self.__getattr__('importprivkey')(privkey, label, rescan)
         desc = descsum_create('combo(' + privkey + ')')
         req = [{
             'desc': desc,
@@ -777,9 +774,6 @@ class RPCOverloadWrapper():
             raise JSONRPCException(import_res[0]['error'])
 
     def addmultisigaddress(self, nrequired, keys, label=None, address_type=None):
-        wallet_info = self.getwalletinfo()
-        if 'descriptors' not in wallet_info or ('descriptors' in wallet_info and not wallet_info['descriptors']):
-            return self.__getattr__('addmultisigaddress')(nrequired, keys, label, address_type)
         cms = self.createmultisig(nrequired, keys, address_type)
         req = [{
             'desc': cms['descriptor'],
@@ -792,9 +786,6 @@ class RPCOverloadWrapper():
         return cms
 
     def importpubkey(self, pubkey, label=None, rescan=None):
-        wallet_info = self.getwalletinfo()
-        if 'descriptors' not in wallet_info or ('descriptors' in wallet_info and not wallet_info['descriptors']):
-            return self.__getattr__('importpubkey')(pubkey, label, rescan)
         desc = descsum_create('combo(' + pubkey + ')')
         req = [{
             'desc': desc,
@@ -806,9 +797,6 @@ class RPCOverloadWrapper():
             raise JSONRPCException(import_res[0]['error'])
 
     def importaddress(self, address, label=None, rescan=None, p2sh=None):
-        wallet_info = self.getwalletinfo()
-        if 'descriptors' not in wallet_info or ('descriptors' in wallet_info and not wallet_info['descriptors']):
-            return self.__getattr__('importaddress')(address, label, rescan, p2sh)
         is_hex = False
         try:
             int(address ,16)

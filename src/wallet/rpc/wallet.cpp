@@ -455,77 +455,6 @@ static RPCHelpMan unloadwallet()
     };
 }
 
-static RPCHelpMan sethdseed()
-{
-    return RPCHelpMan{"sethdseed",
-                "\nSet or generate a new HD wallet seed. Non-HD wallets will not be upgraded to being a HD wallet. Wallets that are already\n"
-                "HD will have a new HD seed set so that new keys added to the keypool will be derived from this new seed.\n"
-                "\nNote that you will need to MAKE A NEW BACKUP of your wallet after setting the HD wallet seed." +
-        HELP_REQUIRING_PASSPHRASE,
-                {
-                    {"newkeypool", RPCArg::Type::BOOL, RPCArg::Default{true}, "Whether to flush old unused addresses, including change addresses, from the keypool and regenerate it.\n"
-                                         "If true, the next address from getnewaddress and change address from getrawchangeaddress will be from this new seed.\n"
-                                         "If false, addresses (including change addresses if the wallet already had HD Chain Split enabled) from the existing\n"
-                                         "keypool will be used until it has been depleted."},
-                    {"seed", RPCArg::Type::STR, RPCArg::DefaultHint{"random seed"}, "The WIF private key to use as the new HD seed.\n"
-                                         "The seed value can be retrieved using the dumpwallet command. It is the private key marked hdseed=1"},
-                },
-                RPCResult{RPCResult::Type::NONE, "", ""},
-                RPCExamples{
-                    HelpExampleCli("sethdseed", "")
-            + HelpExampleCli("sethdseed", "false")
-            + HelpExampleCli("sethdseed", "true \"wifkey\"")
-            + HelpExampleRpc("sethdseed", "true, \"wifkey\"")
-                },
-        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
-{
-    std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
-    if (!pwallet) return UniValue::VNULL;
-
-    LegacyScriptPubKeyMan& spk_man = EnsureLegacyScriptPubKeyMan(*pwallet, true);
-
-    if (pwallet->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS)) {
-        throw JSONRPCError(RPC_WALLET_ERROR, "Cannot set a HD seed to a wallet with private keys disabled");
-    }
-
-    LOCK2(pwallet->cs_wallet, spk_man.cs_KeyStore);
-
-    // Do not do anything to non-HD wallets
-    if (!pwallet->CanSupportFeature(FEATURE_HD)) {
-        throw JSONRPCError(RPC_WALLET_ERROR, "Cannot set an HD seed on a non-HD wallet. Use the upgradewallet RPC in order to upgrade a non-HD wallet to HD");
-    }
-
-    EnsureWalletIsUnlocked(*pwallet);
-
-    bool flush_key_pool = true;
-    if (!request.params[0].isNull()) {
-        flush_key_pool = request.params[0].get_bool();
-    }
-
-    CPubKey master_pub_key;
-    if (request.params[1].isNull()) {
-        master_pub_key = spk_man.GenerateNewSeed();
-    } else {
-        CKey key = DecodeSecret(request.params[1].get_str());
-        if (!key.IsValid()) {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid private key");
-        }
-
-        if (HaveKey(spk_man, key)) {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Already have this key (either as an HD seed or as a loose private key)");
-        }
-
-        master_pub_key = spk_man.DeriveNewSeed(key);
-    }
-
-    spk_man.SetHDSeed(master_pub_key);
-    if (flush_key_pool) spk_man.NewKeyPool();
-
-    return UniValue::VNULL;
-},
-    };
-}
-
 static RPCHelpMan upgradewallet()
 {
     return RPCHelpMan{"upgradewallet",
@@ -701,68 +630,12 @@ RPCHelpMan simulaterawtransaction()
     };
 }
 
-static RPCHelpMan migratewallet()
-{
-    return RPCHelpMan{"migratewallet",
-        "EXPERIMENTAL warning: This call may not work as expected and may be changed in future releases\n"
-        "\nMigrate the wallet to a descriptor wallet.\n"
-        "A new wallet backup will need to be made.\n"
-        "\nThe migration process will create a backup of the wallet before migrating. This backup\n"
-        "file will be named <wallet name>-<timestamp>.legacy.bak and can be found in the directory\n"
-        "for this wallet. In the event of an incorrect migration, the backup can be restored using restorewallet." +
-        HELP_REQUIRING_PASSPHRASE,
-        {},
-        RPCResult{
-            RPCResult::Type::OBJ, "", "",
-            {
-                {RPCResult::Type::STR, "wallet_name", "The name of the primary migrated wallet"},
-                {RPCResult::Type::STR, "watchonly_name", /*optional=*/true, "The name of the migrated wallet containing the watchonly scripts"},
-                {RPCResult::Type::STR, "solvables_name", /*optional=*/true, "The name of the migrated wallet containing solvable but not watched scripts"},
-                {RPCResult::Type::STR, "backup_path", "The location of the backup of the original wallet"},
-            }
-        },
-        RPCExamples{
-            HelpExampleCli("migratewallet", "")
-            + HelpExampleRpc("migratewallet", "")
-        },
-        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
-        {
-            std::shared_ptr<CWallet> wallet = GetWalletForJSONRPCRequest(request);
-            if (!wallet) return NullUniValue;
-
-            if (wallet->IsCrypted()) {
-                throw JSONRPCError(RPC_WALLET_WRONG_ENC_STATE, "Error: migratewallet on encrypted wallets is currently unsupported.");
-            }
-
-            WalletContext& context = EnsureWalletContext(request.context);
-
-            util::Result<MigrationResult> res = MigrateLegacyToDescriptor(std::move(wallet), context);
-            if (!res) {
-                throw JSONRPCError(RPC_WALLET_ERROR, util::ErrorString(res).original);
-            }
-
-            UniValue r{UniValue::VOBJ};
-            r.pushKV("wallet_name", res->wallet_name);
-            if (res->watchonly_wallet) {
-                r.pushKV("watchonly_name", res->watchonly_wallet->GetName());
-            }
-            if (res->solvables_wallet) {
-                r.pushKV("solvables_name", res->solvables_wallet->GetName());
-            }
-            r.pushKV("backup_path", res->backup_path.u8string());
-
-            return r;
-        },
-    };
-}
-
 // addresses
 RPCHelpMan getaddressinfo();
 RPCHelpMan getnewaddress();
 RPCHelpMan getrawchangeaddress();
 RPCHelpMan setlabel();
 RPCHelpMan listaddressgroupings();
-RPCHelpMan addmultisigaddress();
 RPCHelpMan keypoolrefill();
 RPCHelpMan newkeypool();
 RPCHelpMan getaddressesbylabel();
@@ -772,15 +645,8 @@ RPCHelpMan walletdisplayaddress();
 #endif // ENABLE_EXTERNAL_SIGNER
 
 // backup
-RPCHelpMan dumpprivkey();
-RPCHelpMan importprivkey();
-RPCHelpMan importaddress();
-RPCHelpMan importpubkey();
-RPCHelpMan dumpwallet();
-RPCHelpMan importwallet();
 RPCHelpMan importprunedfunds();
 RPCHelpMan removeprunedfunds();
-RPCHelpMan importmulti();
 RPCHelpMan importdescriptors();
 RPCHelpMan listdescriptors();
 RPCHelpMan backupwallet();
@@ -834,14 +700,11 @@ Span<const CRPCCommand> GetWalletRPCCommands()
         {"rawtransactions", &fundrawtransaction},
         {"wallet", &abandontransaction},
         {"wallet", &abortrescan},
-        {"wallet", &addmultisigaddress},
         {"wallet", &backupwallet},
         {"wallet", &bumpfee},
         {"wallet", &psbtbumpfee},
         {"wallet", &createwallet},
         {"wallet", &restorewallet},
-        {"wallet", &dumpprivkey},
-        {"wallet", &dumpwallet},
         {"wallet", &encryptwallet},
         {"wallet", &getaddressesbylabel},
         {"wallet", &getaddressinfo},
@@ -854,13 +717,8 @@ Span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &getunconfirmedbalance},
         {"wallet", &getbalances},
         {"wallet", &getwalletinfo},
-        {"wallet", &importaddress},
         {"wallet", &importdescriptors},
-        {"wallet", &importmulti},
-        {"wallet", &importprivkey},
         {"wallet", &importprunedfunds},
-        {"wallet", &importpubkey},
-        {"wallet", &importwallet},
         {"wallet", &keypoolrefill},
         {"wallet", &listaddressgroupings},
         {"wallet", &listdescriptors},
@@ -875,14 +733,12 @@ Span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &listwallets},
         {"wallet", &loadwallet},
         {"wallet", &lockunspent},
-        {"wallet", &migratewallet},
         {"wallet", &newkeypool},
         {"wallet", &removeprunedfunds},
         {"wallet", &rescanblockchain},
         {"wallet", &send},
         {"wallet", &sendmany},
         {"wallet", &sendtoaddress},
-        {"wallet", &sethdseed},
         {"wallet", &setlabel},
         {"wallet", &settxfee},
         {"wallet", &setwalletflag},
