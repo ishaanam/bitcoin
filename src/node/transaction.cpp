@@ -26,7 +26,7 @@ bool NonceDB::Process(const uint256& txid, const int& vin, const std::string& no
 
     if (!db_status.ok()) {
         db_status = m_db->Put(leveldb::WriteOptions(), nonce, strprintf("%s:%i_%s", txid.GetHex(), vin, public_key));
-        if (!db_status.ok()) throw std::runtime_error("Error: unable to write to the nonce DB");
+        if (!db_status.ok()) throw std::runtime_error(strprintf("Error: unable to write to the nonce DB: %s", db_status.ToString()));
         return false;
     } else {
         std::vector<NonceInfo> nonce_info_vector =  ParseNonceValueList(old_value);
@@ -34,17 +34,17 @@ bool NonceDB::Process(const uint256& txid, const int& vin, const std::string& no
         for (const NonceInfo& nonce_info : nonce_info_vector) {
             if (nonce_info.pub_key == public_key && !(txid.GetHex() == nonce_info.txid && nonce_info.vin == std::to_string(vin))) {
                 reuse_counter += 1;
+            } else if (nonce_info.pub_key == public_key && txid.GetHex() == nonce_info.txid && nonce_info.vin == std::to_string(vin)) {
+                // return now to avoid duplicate entries
+                return false;
             }
         }
-        if (reuse_counter == 1) {
-            leveldb::Status db_status = m_db->Put(leveldb::WriteOptions(), nonce, strprintf("%s*%s:%i_%s", old_value, txid.GetHex(), vin, public_key));
-            if (!db_status.ok()) throw std::runtime_error("Error: unable to write to the nonce DB");
-            return true;
-        } else {
-            // This means the existing databse entry is the same as what we have now, or
-            // we can already calculate this, return false
-            return false;
-        }
+
+        leveldb::Status db_status = m_db->Put(leveldb::WriteOptions(), nonce, strprintf("%s*%s:%i_%s", old_value, txid.GetHex(), vin, public_key));
+        if (!db_status.ok()) throw std::runtime_error("Error: unable to write to the nonce DB");
+
+        // Iff we have only seen this nonce used with this public key, we can now calculate a private key we previously could not
+        return reuse_counter == 1;
     }
 }
 
