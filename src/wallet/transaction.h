@@ -319,6 +319,27 @@ struct WalletTxOrderComparator {
         return a->nOrderPos < b->nOrderPos;
     }
 };
+
+struct CWalletUTXO {
+    COutPoint outpoint;
+
+    CWalletUTXO(const COutPoint& outpoint)
+      : outpoint(outpoint)
+        {}
+
+    CWalletUTXO(const uint256& hash, const int& n)
+      : outpoint(hash, n)
+        {}
+
+    friend bool operator==(const CWalletUTXO& a, const CWalletUTXO& b) {
+        return a.outpoint == b.outpoint;
+    }
+
+    friend bool operator<(const CWalletUTXO& a, const CWalletUTXO& b) {
+        return a.outpoint < b.outpoint;
+    }
+};
+
 } // namespace wallet
 
 #endif // BITCOIN_WALLET_TRANSACTION_H

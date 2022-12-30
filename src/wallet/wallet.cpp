@@ -495,6 +495,37 @@ const CWalletTx* CWallet::GetWalletTx(const uint256& hash) const
 
 void CWallet::UpdateTxState(CWalletTx& wtx, const TxState& state) {
     wtx.m_state = state;
+    UpdateUTXOPool(wtx);
+}
+
+void CWallet::UpdateUTXOPool(const CWalletTx& wtx) {
+    AssertLockHeld(cs_wallet);
+
+    if (std::holds_alternative<TxStateConfirmed>(wtx.m_state) || std::holds_alternative<TxStateInMempool>(wtx.m_state)) {
+        for (unsigned long int i = 0; i < wtx.tx->vout.size(); i++) {
+            isminetype mine = IsMine(wtx.tx->vout[i]);
+
+            if (mine != ISMINE_NO) {
+                utxo_pool.emplace(wtx.GetHash(), i);
+            }
+        }
+
+        for (const CTxIn& tx_in : wtx.tx->vin) {
+            utxo_pool.erase(CWalletUTXO(tx_in.prevout));
+        }
+    } else if (std::holds_alternative<TxStateInactive>(wtx.m_state) || std::holds_alternative<TxStateConflicted>(wtx.m_state)) {
+        for (unsigned long int i = 0; i < wtx.tx->vout.size(); i++) {
+            utxo_pool.erase(CWalletUTXO(wtx.GetHash(), i));
+        }
+
+        for (const CTxIn& tx_in : wtx.tx->vin) {
+            isminetype mine = IsMine(tx_in.prevout);
+
+            if (mine != ISMINE_NO) {
+                utxo_pool.emplace(tx_in.prevout);
+            }
+        }
+    }
 }
 
 void CWallet::UpgradeKeyMetadata()
@@ -1071,6 +1102,8 @@ CWalletTx* CWallet::AddToWallet(CTransactionRef tx, const TxState& state, const 
         }
     }
 
+    UpdateUTXOPool(wtx);
+
     //// debug print
     WalletLogPrintf("AddToWallet %s  %s%s\n", hash.ToString(), (fInsertedNew ? "new" : ""), (fUpdated ? "update" : ""));
 
@@ -1148,6 +1181,7 @@ bool CWallet::LoadToWallet(const uint256& hash, const UpdateWalletTxFn& fill_wtx
         wtx.m_it_wtxOrdered = wtxOrdered.insert(std::make_pair(wtx.nOrderPos, &wtx));
     }
     AddToSpends(wtx);
+    UpdateUTXOPool(wtx);
     for (const CTxIn& txin : wtx.tx->vin) {
         auto it = mapWallet.find(txin.prevout.hash);
         if (it != mapWallet.end()) {
@@ -2335,6 +2369,12 @@ DBErrors CWallet::LoadWallet()
     if (m_spk_managers.empty()) {
         assert(m_external_spk_managers.empty());
         assert(m_internal_spk_managers.empty());
+    } else {
+        // This would mean that we can now identify which UTXOs
+        // belong to the wallet, so the UTXO pool should be updated
+        for (const auto& wtx_entry : mapWallet) {
+            UpdateUTXOPool(wtx_entry.second);
+        }
     }
 
     return nLoadWalletRet;

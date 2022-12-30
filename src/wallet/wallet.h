@@ -401,6 +401,11 @@ public:
 
     void UpdateTxState(CWalletTx& wtx, const TxState& state);
 
+    std::set<CWalletUTXO> utxo_pool GUARDED_BY(cs_wallet);
+
+    void UpdateUTXOPool(const CWalletTx& wtx);
+
+
     typedef std::multimap<int64_t, CWalletTx*> TxItems;
     TxItems wtxOrdered;
 
