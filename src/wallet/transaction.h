@@ -137,6 +137,7 @@ public:
 class CWalletTx
 {
 public:
+    friend class CWallet;
     /**
      * Key/value map with information about the transaction.
      *
@@ -220,10 +221,6 @@ public:
 private:
     TxState m_state;
 public:
-
-    void UpdateState(const TxState& state) {
-        m_state = state;
-    }
 
     TxState GetState() const {
         return m_state;
