@@ -101,9 +101,9 @@ static void UpdateWalletSetting(interfaces::Chain& chain,
 static void RefreshMempoolStatus(CWalletTx& tx, interfaces::Chain& chain)
 {
     if (chain.isInMempool(tx.GetHash())) {
-        tx.m_state = TxStateInMempool();
-    } else if (tx.state<TxStateInMempool>()) {
-        tx.m_state = TxStateInactive();
+        tx.UpdateState(TxStateInMempool());
+    } else if (std::holds_alternative<TxStateInMempool>(tx.GetState())) {
+        tx.UpdateState(TxStateInactive());
     }
 }
 
@@ -1049,12 +1049,12 @@ CWalletTx* CWallet::AddToWallet(CTransactionRef tx, const TxState& state, const 
 
     if (!fInsertedNew)
     {
-        if (state.index() != wtx.m_state.index()) {
-            wtx.m_state = state;
+        if (state.index() != wtx.GetState().index()) {
+            wtx.UpdateState(state);
             fUpdated = true;
         } else {
-            assert(TxStateSerializedIndex(wtx.m_state) == TxStateSerializedIndex(state));
-            assert(TxStateSerializedBlockHash(wtx.m_state) == TxStateSerializedBlockHash(state));
+            assert(TxStateSerializedIndex(wtx.GetState()) == TxStateSerializedIndex(state));
+            assert(TxStateSerializedBlockHash(wtx.GetState()) == TxStateSerializedBlockHash(state));
         }
         // If we have a witness-stripped version of this transaction, and we
         // see a new version with a witness, then we must be upgrading a pre-segwit
@@ -1123,7 +1123,7 @@ bool CWallet::LoadToWallet(const uint256& hash, const UpdateWalletTxFn& fill_wtx
     // don't bother to update txn.
     if (HaveChain()) {
         bool active;
-        auto lookup_block = [&](const uint256& hash, int& height, TxState& state) {
+        auto lookup_block = [&](const uint256& hash, int& height, CWalletTx& wtx) {
             // If tx block (or conflicting block) was reorged out of chain
             // while the wallet was shutdown, change tx status to UNCONFIRMED
             // and reset block height, hash, and index. ABANDONED tx don't have
@@ -1131,13 +1131,13 @@ bool CWallet::LoadToWallet(const uint256& hash, const UpdateWalletTxFn& fill_wtx
             // transaction was reorged out while online and then reconfirmed
             // while offline is covered by the rescan logic.
             if (!chain().findBlock(hash, FoundBlock().inActiveChain(active).height(height)) || !active) {
-                state = TxStateInactive{};
+                wtx.UpdateState(TxStateInactive{});
             }
         };
         if (auto* conf = wtx.state<TxStateConfirmed>()) {
-            lookup_block(conf->confirmed_block_hash, conf->confirmed_block_height, wtx.m_state);
+            lookup_block(conf->confirmed_block_hash, conf->confirmed_block_height, wtx);
         } else if (auto* conf = wtx.state<TxStateConflicted>()) {
-            lookup_block(conf->conflicting_block_hash, conf->conflicting_block_height, wtx.m_state);
+            lookup_block(conf->conflicting_block_hash, conf->conflicting_block_height, wtx);
         }
     }
     if (/* insertion took place */ ins.second) {
@@ -1272,7 +1272,7 @@ bool CWallet::AbandonTransaction(const uint256& hashTx)
         if (currentconfirm == 0 && !wtx.isAbandoned()) {
             // If the orig tx was not in block/mempool, none of its spends can be in mempool
             assert(!wtx.InMempool());
-            wtx.m_state = TxStateInactive{/*abandoned=*/true};
+            wtx.UpdateState(TxStateInactive{/*abandoned=*/true});
             wtx.MarkDirty();
             batch.WriteTx(wtx);
             NotifyTransactionChanged(wtx.GetHash(), CT_UPDATED);
@@ -1325,7 +1325,7 @@ void CWallet::MarkConflicted(const uint256& hashBlock, int conflicting_height, c
         if (conflictconfirms < currentconfirm) {
             // Block is 'more conflicted' than current confirm; update.
             // Mark transaction as conflicted with this block.
-            wtx.m_state = TxStateConflicted{hashBlock, conflicting_height};
+            wtx.UpdateState(TxStateConflicted{hashBlock, conflicting_height});
             wtx.MarkDirty();
             batch.WriteTx(wtx);
             // Iterate over all its outputs, and mark transactions in the wallet that spend them conflicted too
@@ -1972,7 +1972,7 @@ bool CWallet::SubmitTxMemoryPoolAndRelay(CWalletTx& wtx, std::string& err_string
     // If transaction was previously in the mempool, it should be updated when
     // TransactionRemovedFromMempool fires.
     bool ret = chain().broadcastTransaction(wtx.tx, m_default_max_tx_fee, relay, err_string);
-    if (ret) wtx.m_state = TxStateInMempool{};
+    if (ret) wtx.UpdateState(TxStateInMempool{});
     return ret;
 }
 
@@ -3898,7 +3898,7 @@ bool CWallet::ApplyMigrationData(MigrationData& data, bilingual_str& error)
                 LOCK(data.watchonly_wallet->cs_wallet);
                 if (data.watchonly_wallet->IsMine(*wtx->tx) || data.watchonly_wallet->IsFromMe(*wtx->tx)) {
                     // Add to watchonly wallet
-                    if (!data.watchonly_wallet->AddToWallet(wtx->tx, wtx->m_state)) {
+                    if (!data.watchonly_wallet->AddToWallet(wtx->tx, wtx->GetState())) {
                         error = _("Error: Could not add watchonly tx to watchonly wallet");
                         return false;
                     }

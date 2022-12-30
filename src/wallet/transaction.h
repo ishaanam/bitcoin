@@ -217,7 +217,17 @@ public:
     }
 
     CTransactionRef tx;
+private:
     TxState m_state;
+public:
+
+    void UpdateState(const TxState& state) {
+        m_state = state;
+    }
+
+    TxState GetState() const {
+        return m_state;
+    }
 
     template<typename Stream>
     void Serialize(Stream& s) const
