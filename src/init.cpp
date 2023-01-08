@@ -1558,9 +1558,12 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         }
 
         g_txindex = std::make_unique<TxIndex>(interfaces::MakeChain(node), cache_sizes.tx_index, false, fReindex);
+
         if (!g_txindex->Start()) {
             return false;
         }
+
+        node.rescan_man = std::make_shared<node::NonceScanManager>(0, "/path/to/db/", cache_sizes.tx_index);
     }
 
     for (const auto& filter_type : g_enabled_filter_types) {
