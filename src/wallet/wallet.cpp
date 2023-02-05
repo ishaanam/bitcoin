@@ -1458,6 +1458,20 @@ void CWallet::blockDisconnected(const interfaces::BlockInfo& block)
     for (const CTransactionRef& ptx : Assert(block.data)->vtx) {
         SyncTransaction(ptx, TxStateInactive{});
     }
+
+    for (auto& entry : mapWallet) {
+        CWalletTx& wtx = entry.second;
+        if (!wtx.isConflicted()) continue;
+
+        const int& conflict_height = wtx.GetConflictHeight();
+        const int& disconnect_height = block.height;
+
+        assert(conflict_height != 0);
+
+        if (conflict_height >= disconnect_height) {
+            SyncTransaction(wtx.tx, TxStateInactive{});
+        }
+    }
 }
 
 void CWallet::updatedBlockTip()

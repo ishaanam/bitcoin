@@ -300,6 +300,14 @@ public:
     const uint256& GetWitnessHash() const { return tx->GetWitnessHash(); }
     bool IsCoinBase() const { return tx->IsCoinBase(); }
 
+    int GetConflictHeight() const {
+        if (isConflicted()) {
+            return state<TxStateConflicted>()->conflicting_block_height;
+        } else {
+            return 0;
+        }
+    }
+
     // Disable copying of CWalletTx objects to prevent bugs where instances get
     // copied in and out of the mapWallet map, and fields are updated in the
     // wrong copy.
