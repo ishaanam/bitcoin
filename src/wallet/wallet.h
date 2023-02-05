@@ -522,6 +522,8 @@ public:
     void updatedBlockTip() override;
     int64_t RescanFromTime(int64_t startTime, const WalletRescanReserver& reserver, bool update);
 
+    void WalletNotifyTransactionChanged(const CWalletTx& wtx);
+
     struct ScanResult {
         enum { SUCCESS, FAILURE, USER_ABORT } status = SUCCESS;
 

@@ -98,13 +98,16 @@ static void UpdateWalletSetting(interfaces::Chain& chain,
  * immediately knows the transaction's status: Whether it can be considered
  * trusted and is eligible to be abandoned ...
  */
-static void RefreshMempoolStatus(CWalletTx& tx, interfaces::Chain& chain)
+static bool RefreshMempoolStatus(CWalletTx& tx, interfaces::Chain& chain)
 {
-    if (chain.isInMempool(tx.GetHash())) {
+    if (chain.isInMempool(tx.GetHash()) && !std::holds_alternative<TxStateInMempool>(tx.m_state)) {
         tx.m_state = TxStateInMempool();
+        return true;
     } else if (tx.state<TxStateInMempool>()) {
         tx.m_state = TxStateInactive();
+        return true;
     }
+    return false;
 }
 
 bool AddWallet(WalletContext& context, const std::shared_ptr<CWallet>& wallet)
@@ -959,6 +962,8 @@ bool CWallet::MarkReplaced(const uint256& originalHash, const uint256& newHash)
 
     NotifyTransactionChanged(originalHash, CT_UPDATED);
 
+    WalletNotifyTransactionChanged(wtx);
+
     return success;
 }
 
@@ -1010,6 +1015,37 @@ bool CWallet::IsSpentKey(const CScript& scriptPubKey) const
         }
     }
     return false;
+}
+
+void CWallet::WalletNotifyTransactionChanged(const CWalletTx& wtx) {
+    AssertLockHeld(cs_wallet);
+#if HAVE_SYSTEM
+    // notify an external script when a wallet transaction comes in or is updated
+    std::string strCmd = m_args.GetArg("-walletnotify", "");
+
+    if (!strCmd.empty())
+    {
+        ReplaceAll(strCmd, "%s", wtx.tx->GetHash().GetHex());
+        if (auto* conf = wtx.state<TxStateConfirmed>())
+        {
+            ReplaceAll(strCmd, "%b", conf->confirmed_block_hash.GetHex());
+            ReplaceAll(strCmd, "%h", ToString(conf->confirmed_block_height));
+        } else {
+            ReplaceAll(strCmd, "%b", "unconfirmed");
+            ReplaceAll(strCmd, "%h", "-1");
+        }
+#ifndef WIN32
+        // Substituting the wallet name isn't currently supported on windows
+        // because windows shell escaping has not been implemented yet:
+        // https://github.com/bitcoin/bitcoin/pull/13339#issuecomment-537384875
+        // A few ways it could be implemented in the future are described in:
+        // https://github.com/bitcoin/bitcoin/pull/13339#issuecomment-461288094
+        ReplaceAll(strCmd, "%w", ShellEscape(GetName()));
+#endif
+        std::thread t(runCommand, strCmd);
+        t.detach(); // thread runs free
+    }
+#endif
 }
 
 CWalletTx* CWallet::AddToWallet(CTransactionRef tx, const TxState& state, const UpdateWalletTxFn& update_wtx, bool fFlushOnClose, bool rescanning_old_block)
@@ -1106,33 +1142,7 @@ CWalletTx* CWallet::AddToWallet(CTransactionRef tx, const TxState& state, const 
     // Notify UI of new or updated transaction
     NotifyTransactionChanged(hash, fInsertedNew ? CT_NEW : CT_UPDATED);
 
-#if HAVE_SYSTEM
-    // notify an external script when a wallet transaction comes in or is updated
-    std::string strCmd = m_args.GetArg("-walletnotify", "");
-
-    if (!strCmd.empty())
-    {
-        ReplaceAll(strCmd, "%s", hash.GetHex());
-        if (auto* conf = wtx.state<TxStateConfirmed>())
-        {
-            ReplaceAll(strCmd, "%b", conf->confirmed_block_hash.GetHex());
-            ReplaceAll(strCmd, "%h", ToString(conf->confirmed_block_height));
-        } else {
-            ReplaceAll(strCmd, "%b", "unconfirmed");
-            ReplaceAll(strCmd, "%h", "-1");
-        }
-#ifndef WIN32
-        // Substituting the wallet name isn't currently supported on windows
-        // because windows shell escaping has not been implemented yet:
-        // https://github.com/bitcoin/bitcoin/pull/13339#issuecomment-537384875
-        // A few ways it could be implemented in the future are described in:
-        // https://github.com/bitcoin/bitcoin/pull/13339#issuecomment-461288094
-        ReplaceAll(strCmd, "%w", ShellEscape(GetName()));
-#endif
-        std::thread t(runCommand, strCmd);
-        t.detach(); // thread runs free
-    }
-#endif
+    WalletNotifyTransactionChanged(wtx); 
 
     return &wtx;
 }
@@ -1390,7 +1400,9 @@ void CWallet::transactionAddedToMempool(const CTransactionRef& tx) {
 
     auto it = mapWallet.find(tx->GetHash());
     if (it != mapWallet.end()) {
-        RefreshMempoolStatus(it->second, chain());
+        if (RefreshMempoolStatus(it->second, chain())) {
+            WalletNotifyTransactionChanged(it->second);
+        }
     }
 }
 
@@ -1398,7 +1410,9 @@ void CWallet::transactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRe
     LOCK(cs_wallet);
     auto it = mapWallet.find(tx->GetHash());
     if (it != mapWallet.end()) {
-        RefreshMempoolStatus(it->second, chain());
+        if (RefreshMempoolStatus(it->second, chain())) {
+            WalletNotifyTransactionChanged(it->second);
+        }
     }
     // Handle transactions that were removed from the mempool because they
     // conflict with transactions in a newly connected block.
