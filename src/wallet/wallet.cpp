@@ -718,8 +718,7 @@ bool CWallet::IsSpent(const COutPoint& outpoint) const
         const uint256& wtxid = it->second;
         const auto mit = mapWallet.find(wtxid);
         if (mit != mapWallet.end()) {
-            int depth = GetTxDepthInMainChain(mit->second);
-            if (depth > 0  || (depth == 0 && !mit->second.isAbandoned()))
+            if (mit->second.isConfirmed() || mit->second.isUnconfirmed())
                 return true; // Spent
         }
     }
