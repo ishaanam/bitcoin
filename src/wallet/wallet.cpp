@@ -1401,6 +1401,26 @@ void CWallet::transactionAddedToMempool(const CTransactionRef& tx) {
     auto it = mapWallet.find(tx->GetHash());
     if (it != mapWallet.end()) {
         RefreshMempoolStatus(it->second, chain());
+
+        for (const CTxIn& tx_in : tx->vin) {
+            if (mapTxSpends.count(tx_in.prevout) <=1) continue;
+
+            std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(tx_in.prevout);
+
+            for (TxSpends::const_iterator _it = range.first; _it != range.second; ++_it) {
+                CWalletTx& wtx = mapWallet.find(_it->second)->second;
+
+                if (wtx.GetHash() == tx->GetHash()) continue;
+
+                if (!(wtx.InMempool() || wtx.isInactive())) continue;
+
+                auto should_update = [&](CWalletTx& wtx) {
+                    return wtx.InMempool() || wtx.isInactive();
+                };
+
+                RecursiveUpdateTxState(wtx.tx->GetHash(), should_update, TxStateMempoolConflicted{});
+            }
+        }
     }
 }
 
@@ -1438,6 +1458,36 @@ void CWallet::transactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRe
         // imperfect, and could be improved in general, see
         // https://github.com/bitcoin-core/bitcoin-devwiki/wiki/Wallet-Transaction-Conflict-Tracking
         SyncTransaction(tx, TxStateInactive{});
+    }
+
+    if (reason != MemPoolRemovalReason::BLOCK) {
+        for (const CTxIn& tx_in : tx->vin) {
+            // No other wallet transactions conflicted with this transaction
+            if (mapTxSpends.count(tx_in.prevout) <= 1) continue;
+
+            std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(tx_in.prevout);
+            for (TxSpends::const_iterator _it = range.first; _it != range.second; ++_it) {
+                CWalletTx& wtx = mapWallet.find(_it->second)->second;
+
+                if (!wtx.isMempoolConflicted()) continue;
+
+                auto should_update = [&](CWalletTx& child_tx) {
+                    bool update{true};
+                    for (const CTxIn& tx_in : child_tx.tx->vin) {
+                        std::pair<TxSpends::const_iterator, TxSpends::const_iterator> next_range = mapTxSpends.equal_range(tx_in.prevout);
+
+                        for (TxSpends::const_iterator next_it = next_range.first; next_it != next_range.second; ++next_it) {
+                            const CWalletTx& current_wtx = mapWallet.find(next_it->second)->second;
+                            if (current_wtx.GetHash() == child_tx.GetHash()) continue;
+                            if (current_wtx.isConflicted()) update = false;
+                        }
+                    }
+                    return update;
+                };
+
+                RecursiveUpdateTxState(wtx.tx->GetHash(), should_update, TxStateInactive{});
+            }
+        }
     }
 }
 

@@ -33,6 +33,10 @@ struct TxStateConfirmed {
 struct TxStateInMempool {
 };
 
+//! State of transaction with a conflict in the mempool.
+struct TxStateMempoolConflicted {
+};
+
 //! State of rejected transaction that conflicts with a confirmed block.
 struct TxStateConflicted {
     uint256 conflicting_block_hash;
@@ -63,10 +67,10 @@ struct TxStateUnrecognized {
 };
 
 //! All possible CWalletTx states
-using TxState = std::variant<TxStateConfirmed, TxStateInMempool, TxStateConflicted, TxStateInactive, TxStateUnrecognized>;
+using TxState = std::variant<TxStateConfirmed, TxStateInMempool, TxStateMempoolConflicted, TxStateConflicted, TxStateInactive, TxStateUnrecognized>;
 
 //! Subset of states transaction sync logic is implemented to handle.
-using SyncTxState = std::variant<TxStateConfirmed, TxStateInMempool, TxStateInactive>;
+using SyncTxState = std::variant<TxStateConfirmed, TxStateInMempool, TxStateMempoolConflicted, TxStateInactive>;
 
 //! Try to interpret deserialized TxStateUnrecognized data as a recognized state.
 static inline TxState TxStateInterpretSerialized(TxStateUnrecognized data)
@@ -89,6 +93,7 @@ static inline uint256 TxStateSerializedBlockHash(const TxState& state)
     return std::visit(util::Overloaded{
         [](const TxStateInactive& inactive) { return inactive.abandoned ? uint256::ONE : uint256::ZERO; },
         [](const TxStateInMempool& in_mempool) { return uint256::ZERO; },
+        [](const TxStateMempoolConflicted& mempool_conflicted) { return uint256::ZERO; },
         [](const TxStateConfirmed& confirmed) { return confirmed.confirmed_block_hash; },
         [](const TxStateConflicted& conflicted) { return conflicted.conflicting_block_hash; },
         [](const TxStateUnrecognized& unrecognized) { return unrecognized.block_hash; }
@@ -101,6 +106,7 @@ static inline int TxStateSerializedIndex(const TxState& state)
     return std::visit(util::Overloaded{
         [](const TxStateInactive& inactive) { return inactive.abandoned ? -1 : 0; },
         [](const TxStateInMempool& in_mempool) { return 0; },
+        [](const TxStateMempoolConflicted& mempool_conflicted) { return 0; },
         [](const TxStateConfirmed& confirmed) { return confirmed.position_in_block; },
         [](const TxStateConflicted& conflicted) { return -1; },
         [](const TxStateUnrecognized& unrecognized) { return unrecognized.index; }
@@ -292,7 +298,8 @@ public:
     template<typename T> T* state() { return std::get_if<T>(&m_state); }
 
     bool isAbandoned() const { return state<TxStateInactive>() && state<TxStateInactive>()->abandoned; }
-    bool isConflicted() const { return state<TxStateConflicted>(); }
+    bool isConflicted() const { return state<TxStateConflicted>() || state<TxStateMempoolConflicted>(); }
+    bool isMempoolConflicted() const { return state<TxStateMempoolConflicted>(); }
     bool isInactive() const { return state<TxStateInactive>(); }
     bool isUnconfirmed() const { return !isAbandoned() && !isConflicted() && !isConfirmed(); }
     bool isConfirmed() const { return state<TxStateConfirmed>(); }
