@@ -434,7 +434,7 @@ public:
     bool IsTxInMainChain(const CWalletTx& wtx) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
     {
         AssertLockHeld(cs_wallet);
-        return GetTxDepthInMainChain(wtx) > 0;
+        return wtx.isConfirmed();
     }
 
     /**
