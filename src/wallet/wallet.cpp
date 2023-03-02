@@ -1270,11 +1270,6 @@ bool CWallet::AbandonTransaction(const uint256& hashTx)
 {
     LOCK(cs_wallet);
 
-    WalletBatch batch(GetDatabase());
-
-    std::set<uint256> todo;
-    std::set<uint256> done;
-
     // Can't mark abandoned if confirmed or in mempool
     auto it = mapWallet.find(hashTx);
     assert(it != mapWallet.end());
@@ -1283,44 +1278,26 @@ bool CWallet::AbandonTransaction(const uint256& hashTx)
         return false;
     }
 
-    todo.insert(hashTx);
-
-    while (!todo.empty()) {
-        uint256 now = *todo.begin();
-        todo.erase(now);
-        done.insert(now);
-        auto it = mapWallet.find(now);
-        assert(it != mapWallet.end());
-        CWalletTx& wtx = it->second;
+    auto try_updating_state = [&](CWalletTx& wtx) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
         int currentconfirm = GetTxDepthInMainChain(wtx);
-        // If the orig tx was not in block, none of its spends can be
         assert(currentconfirm <= 0);
-        // if (currentconfirm < 0) {Tx and spends are already conflicted, no need to abandon}
+
         if (currentconfirm == 0 && !wtx.isAbandoned()) {
-            // If the orig tx was not in block/mempool, none of its spends can be in mempool
             assert(!wtx.InMempool());
             wtx.m_state = TxStateInactive{/*abandoned=*/true};
-            wtx.MarkDirty();
-            batch.WriteTx(wtx);
             NotifyTransactionChanged(wtx.GetHash(), CT_UPDATED);
-            // Iterate over all its outputs, and mark transactions in the wallet that spend them abandoned too.
-            // States are not permanent, so these transactions can become unabandoned if they are re-added to the
-            // mempool, or confirmed in a block, or conflicted.
-            // Note: If the reorged coinbase is re-added to the main chain, the descendants that have not had their
-            // states change will remain abandoned and will require manual broadcast if the user wants them.
-            for (unsigned int i = 0; i < wtx.tx->vout.size(); ++i) {
-                std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(COutPoint(now, i));
-                for (TxSpends::const_iterator iter = range.first; iter != range.second; ++iter) {
-                    if (!done.count(iter->second)) {
-                        todo.insert(iter->second);
-                    }
-                }
-            }
-            // If a transaction changes 'conflicted' state, that changes the balance
-            // available of the outputs it spends. So force those to be recomputed
-            MarkInputsDirty(wtx.tx);
+            return true;
         }
-    }
+        return false;
+    };
+
+    // Iterate over all its outputs, and mark transactions in the wallet that spend them abandoned too.
+    // States are not permanent, so these transactions can become unabandoned if they are re-added to the
+    // mempool, or confirmed in a block, or conflicted.
+    // Note: If the reorged coinbase is re-added to the main chain, the descendants that have not had their
+    // states change will remain abandoned and will require manual broadcast if the user wants them.
+
+    RecursiveUpdateTxState(hashTx, try_updating_state);
 
     return true;
 }
@@ -1337,13 +1314,27 @@ void CWallet::MarkConflicted(const uint256& hashBlock, int conflicting_height, c
     if (conflictconfirms >= 0)
         return;
 
-    // Do not flush the wallet here for performance reasons
+    auto try_updating_state = [&](CWalletTx& wtx) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
+        if (conflictconfirms < GetTxDepthInMainChain(wtx)) {
+            wtx.m_state = TxStateConflicted{hashBlock, conflicting_height};
+            return true;
+        }
+        return false;
+    };
+
+    RecursiveUpdateTxState(hashTx, try_updating_state);
+
+}
+
+void CWallet::RecursiveUpdateTxState(const uint256& tx_hash, const TryUpdatingStateFn& try_updating_state) {
+    LOCK(cs_wallet);
+
     WalletBatch batch(GetDatabase(), false);
 
     std::set<uint256> todo;
     std::set<uint256> done;
 
-    todo.insert(hashTx);
+    todo.insert(tx_hash);
 
     while (!todo.empty()) {
         uint256 now = *todo.begin();
@@ -1352,14 +1343,10 @@ void CWallet::MarkConflicted(const uint256& hashBlock, int conflicting_height, c
         auto it = mapWallet.find(now);
         assert(it != mapWallet.end());
         CWalletTx& wtx = it->second;
-        int currentconfirm = GetTxDepthInMainChain(wtx);
-        if (conflictconfirms < currentconfirm) {
-            // Block is 'more conflicted' than current confirm; update.
-            // Mark transaction as conflicted with this block.
-            wtx.m_state = TxStateConflicted{hashBlock, conflicting_height};
+        if (try_updating_state(wtx)) {
             wtx.MarkDirty();
             batch.WriteTx(wtx);
-            // Iterate over all its outputs, and mark transactions in the wallet that spend them conflicted too
+            // Iterate over all its outputs, and update those tx states as well (if applicable)
             for (unsigned int i = 0; i < wtx.tx->vout.size(); ++i) {
                 std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(COutPoint(now, i));
                 for (TxSpends::const_iterator iter = range.first; iter != range.second; ++iter) {
@@ -1368,7 +1355,7 @@ void CWallet::MarkConflicted(const uint256& hashBlock, int conflicting_height, c
                     }
                 }
             }
-            // If a transaction changes 'conflicted' state, that changes the balance
+            // If a transaction changes its tx state, that usually changes the balance
             // available of the outputs it spends. So force those to be recomputed
             MarkInputsDirty(wtx.tx);
         }
