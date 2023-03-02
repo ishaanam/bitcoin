@@ -1336,13 +1336,25 @@ void CWallet::MarkConflicted(const uint256& hashBlock, int conflicting_height, c
     if (conflictconfirms >= 0)
         return;
 
-    // Do not flush the wallet here for performance reasons
+    auto should_update = [&](CWalletTx& wtx) {
+        LOCK(cs_wallet);
+
+        return conflictconfirms < GetTxDepthInMainChain(wtx);
+    };
+
+    RecursiveUpdateTxState(hashTx, should_update, TxStateConflicted{hashBlock, conflicting_height});
+
+}
+
+void CWallet::RecursiveUpdateTxState(const uint256& tx_hash, const std::function<bool(CWalletTx& wtx)>& should_update, const TxState& tx_state) {
+    LOCK(cs_wallet);
+
     WalletBatch batch(GetDatabase(), false);
 
     std::set<uint256> todo;
     std::set<uint256> done;
 
-    todo.insert(hashTx);
+    todo.insert(tx_hash);
 
     while (!todo.empty()) {
         uint256 now = *todo.begin();
@@ -1351,11 +1363,8 @@ void CWallet::MarkConflicted(const uint256& hashBlock, int conflicting_height, c
         auto it = mapWallet.find(now);
         assert(it != mapWallet.end());
         CWalletTx& wtx = it->second;
-        int currentconfirm = GetTxDepthInMainChain(wtx);
-        if (conflictconfirms < currentconfirm) {
-            // Block is 'more conflicted' than current confirm; update.
-            // Mark transaction as conflicted with this block.
-            wtx.m_state = TxStateConflicted{hashBlock, conflicting_height};
+        if (should_update(wtx)) {
+            wtx.m_state = tx_state;
             wtx.MarkDirty();
             batch.WriteTx(wtx);
             // Iterate over all its outputs, and mark transactions in the wallet that spend them conflicted too
