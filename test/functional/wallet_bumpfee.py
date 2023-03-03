@@ -40,6 +40,10 @@ NORMAL       =    100
 HIGH         =    500
 TOO_HIGH     = 100000
 
+def get_change_address(tx, node):
+    tx_details = node.getrawtransaction(tx, 1)
+    txout_addresses = [txout['scriptPubKey']['address'] for txout in tx_details["vout"]]
+    return [address for address in txout_addresses if node.getaddressinfo(address)["ischange"]]
 
 class BumpFeeTest(BitcoinTestFramework):
     def add_options(self, parser):
@@ -103,6 +107,7 @@ class BumpFeeTest(BitcoinTestFramework):
         # These tests wipe out a number of utxos that are expected in other tests
         test_small_output_with_feerate_succeeds(self, rbf_node, dest_address)
         test_no_more_inputs_fails(self, rbf_node, dest_address)
+        self.test_bump_back_to_yourself()
 
     def test_invalid_parameters(self, rbf_node, peer_node, dest_address):
         self.log.info('Test invalid parameters')
@@ -167,6 +172,35 @@ class BumpFeeTest(BitcoinTestFramework):
 
         self.clear_mempool()
 
+    def test_bump_back_to_yourself(self):
+        self.log.info("Test that bumpfee can send coins back to yourself")
+        node = self.nodes[1]
+
+        node.createwallet("back_to_yourself")
+        wallet = node.get_wallet_rpc("back_to_yourself")
+
+        # Make 2 UTXOs
+        addr = wallet.getnewaddress()
+        for _ in range(2):
+            self.nodes[0].sendtoaddress(addr, 5)
+        self.generate(self.nodes[0], 1)
+
+        # Create a tx with two outputs. recipient and change.
+        tx = wallet.send(outputs={wallet.getnewaddress(): 9}, fee_rate=2)
+        tx_info = wallet.gettransaction(txid=tx["txid"], verbose=True)
+        assert_equal(len(tx_info["decoded"]["vout"]), 2)
+        assert_equal(len(tx_info["decoded"]["vin"]), 2)
+
+        # Bump tx, send coins back to the change address.
+        change_addr = get_change_address(tx["txid"], wallet)[0]
+        out_amount = 10
+        bumped = wallet.bumpfee(txid=tx["txid"], options={"fee_rate": 20, "outputs": [{change_addr: out_amount}]})
+        bumped_tx = wallet.gettransaction(txid=bumped["txid"], verbose=True)
+        assert_equal(len(bumped_tx["decoded"]["vout"]), 1)
+        assert_equal(len(bumped_tx["decoded"]["vin"]), 2)
+        assert_equal(bumped_tx["decoded"]["vout"][0]["value"] + bumped["fee"], out_amount)
+
+        node.unloadwallet("back_to_yourself")
 
 def test_simple_bumpfee_succeeds(self, mode, rbf_node, peer_node, dest_address):
     self.log.info('Test simple bumpfee: {}'.format(mode))
@@ -626,21 +660,16 @@ def test_locked_wallet_fails(self, rbf_node, dest_address):
 def test_change_script_match(self, rbf_node, dest_address):
     self.log.info('Test that the same change addresses is used for the replacement transaction when possible')
 
-    def get_change_address(tx):
-        tx_details = rbf_node.getrawtransaction(tx, 1)
-        txout_addresses = [txout['scriptPubKey']['address'] for txout in tx_details["vout"]]
-        return [address for address in txout_addresses if rbf_node.getaddressinfo(address)["ischange"]]
-
     # Check that there is only one change output
     rbfid = spend_one_input(rbf_node, dest_address)
-    change_addresses = get_change_address(rbfid)
+    change_addresses = get_change_address(rbfid, rbf_node)
     assert_equal(len(change_addresses), 1)
 
     # Now find that address in each subsequent tx, and no other change
     bumped_total_tx = rbf_node.bumpfee(rbfid, {"fee_rate": ECONOMICAL})
-    assert_equal(change_addresses, get_change_address(bumped_total_tx['txid']))
+    assert_equal(change_addresses, get_change_address(bumped_total_tx['txid'], rbf_node))
     bumped_rate_tx = rbf_node.bumpfee(bumped_total_tx["txid"])
-    assert_equal(change_addresses, get_change_address(bumped_rate_tx['txid']))
+    assert_equal(change_addresses, get_change_address(bumped_rate_tx['txid'], rbf_node))
     self.clear_mempool()
 
 
