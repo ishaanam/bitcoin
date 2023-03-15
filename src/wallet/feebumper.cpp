@@ -239,9 +239,15 @@ Result CreateRateBumpTransaction(CWallet& wallet, const uint256& txid, const CCo
             CRecipient recipient = {output.scriptPubKey, output.nValue, false};
             recipients.push_back(recipient);
         } else {
-            CTxDestination change_dest;
-            ExtractDestination(output.scriptPubKey, change_dest);
-            new_coin_control.destChange = change_dest;
+            // The only output is a change address
+            if (outputs.size() == 1) {
+                CRecipient recipient = {output.scriptPubKey, output.nValue, /*fSubtractFeeFromAmount=*/true};
+                recipients.push_back(recipient);
+            } else {
+                CTxDestination change_dest;
+                ExtractDestination(output.scriptPubKey, change_dest);
+                new_coin_control.destChange = change_dest;
+            }
         }
     }
 
