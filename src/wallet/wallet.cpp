@@ -1363,6 +1363,41 @@ void CWallet::RecursiveUpdateTxState(const uint256& tx_hash, const TryUpdatingSt
     }
 }
 
+bool CWallet::HasMempoolConflicts(const CWalletTx& wtx) {
+    std::vector<uint256> mempool_wallet_ancestors;
+    mempool_wallet_ancestors.push_back(wtx.tx->GetHash());
+    std::vector<COutPoint> prevouts;
+    for (const CTxIn& tx_in : wtx.tx->vin) {
+        prevouts.push_back(tx_in.prevout);
+        mempool_wallet_ancestors.push_back(tx_in.prevout.hash);
+    }
+
+    while (prevouts.size() > 0) {
+        COutPoint prevout = prevouts.at(0);
+        std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(prevout);
+
+        for (TxSpends::const_iterator _it = range.first; _it != range.second; ++_it) {
+            const uint256& conflict_tx = _it->second;
+            if (std::find(mempool_wallet_ancestors.begin(), mempool_wallet_ancestors.end(), conflict_tx) != mempool_wallet_ancestors.end()) continue;
+            if (chain().isInMempool(conflict_tx)) {
+                return true;
+            }
+        }
+
+        auto it = mapWallet.find(prevout.hash);
+        if (it != mapWallet.end()) {
+            for (const CTxIn& tx_in : it->second.tx->vin) {
+                prevouts.push_back(tx_in.prevout);
+                mempool_wallet_ancestors.push_back(tx_in.prevout.hash);
+            }
+        }
+
+        prevouts.erase(prevouts.begin());
+    }
+
+    return false;
+}
+
 void CWallet::SyncTransaction(const CTransactionRef& ptx, const SyncTxState& state, bool update_tx, bool rescanning_old_block)
 {
     if (!AddToWalletIfInvolvingMe(ptx, state, update_tx, rescanning_old_block))

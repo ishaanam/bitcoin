@@ -295,6 +295,9 @@ private:
     /** Mark a transaction (and its in-wallet descendants) as a particular tx state. */
     void RecursiveUpdateTxState(const uint256& tx_hash, const TryUpdatingStateFn& try_updating_state);
 
+    /** Determine whether a wallet tx has any conflicts in the mempool. */
+    bool HasMempoolConflicts(const CWalletTx& wtx);
+
     /** Mark a transaction's inputs dirty, thus forcing the outputs to be recomputed */
     void MarkInputsDirty(const CTransactionRef& tx) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
