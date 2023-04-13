@@ -9,6 +9,7 @@ Test that wallet correctly tracks transactions that have been conflicted by bloc
 
 from decimal import Decimal
 
+from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
         assert_equal,
@@ -25,6 +26,11 @@ class TxConflicts(BitcoinTestFramework):
         self.skip_if_no_wallet()
 
     def run_test(self):
+        self.test_block_conflicts()
+        self.test_mempool_conflict()
+        self.test_mempool_and_block_conflicts()
+
+    def test_block_conflicts(self):
         self.log.info("Send tx from which to conflict outputs later")
         txid_conflict_from_1 = self.nodes[0].sendtoaddress(self.nodes[0].getnewaddress(), Decimal("10"))
         txid_conflict_from_2 = self.nodes[0].sendtoaddress(self.nodes[0].getnewaddress(), Decimal("10"))
@@ -104,6 +110,141 @@ class TxConflicts(BitcoinTestFramework):
         former_conflicted = self.nodes[0].gettransaction(conflicted_txid)
         assert_equal(former_conflicted["confirmations"], 1)
         assert_equal(former_conflicted["blockheight"], 217)
+
+    def test_mempool_conflict(self):
+        self.nodes[0].createwallet("alice")
+        alice = self.nodes[0].get_wallet_rpc("alice")
+
+        self.nodes[1].createwallet("bob")
+        bob = self.nodes[1].get_wallet_rpc("bob")
+
+        self.generatetoaddress(self.nodes[0], COINBASE_MATURITY + 3, alice.getnewaddress())
+
+        self.log.info("Test a scenario where a transaction has a mempool conflict")
+
+        unspents = [{"txid" : element["txid"], "vout" : element["vout"]} for element in alice.listunspent()]
+        assert_equal(len(unspents), 3)
+
+        raw_tx = alice.createrawtransaction(inputs=[unspents[0], unspents[1]], outputs=[{bob.getnewaddress() : 49.9999}])
+        tx1 = alice.signrawtransactionwithwallet(raw_tx)['hex']
+
+        raw_tx = alice.createrawtransaction(inputs=[unspents[1], unspents[2]], outputs=[{bob.getnewaddress() : 49.99}])
+        tx2 = alice.signrawtransactionwithwallet(raw_tx)['hex']
+
+        raw_tx = alice.createrawtransaction(inputs=[unspents[2]], outputs=[{bob.getnewaddress() : 24.9899}])
+        tx3 = alice.signrawtransactionwithwallet(raw_tx)['hex']
+
+        tx1 = alice.sendrawtransaction(tx1)
+
+        assert_equal(alice.listunspent()[0]["txid"], unspents[2]["txid"])
+        assert_equal(alice.getbalance(), 25)
+
+        tx2 = alice.sendrawtransaction(tx2)
+
+        # Check that the 0th unspent is now available because the transaction spending it has been replaced in the mempool
+        assert_equal(alice.listunspent()[0]["txid"], unspents[0]["txid"])
+        assert_equal(alice.getbalance(), 25)
+
+        self.log.info("Test scenario where a mempool conflict is removed")
+
+        tx3 = alice.sendrawtransaction(tx3)
+
+        # now all of alice's outputs should be considered spent
+        assert_equal(alice.listunspent(), [])
+        assert_equal(alice.getbalance(), 0)
+
+        alice.sendrawtransaction(alice.gettransaction(tx1)['hex'])
+        self.generate(self.nodes[0], 3)
+        assert_equal(alice.getbalance(), 75)
+
+    def test_mempool_and_block_conflicts(self):
+        alice = self.nodes[0].get_wallet_rpc("alice")
+        bob = self.nodes[1].get_wallet_rpc("bob")
+
+        self.log.info("Test a scenario where a transaction has both a block conflict and a mempool conflict")
+        unspents = [{"txid" : element["txid"], "vout" : element["vout"]} for element in alice.listunspent()]
+
+        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], 0)
+
+        raw_tx = alice.createrawtransaction(inputs=[unspents[0]], outputs=[{bob.getnewaddress() : 24.99999}])
+        raw_tx1 = alice.signrawtransactionwithwallet(raw_tx)['hex']
+        tx1 = bob.sendrawtransaction(raw_tx1)
+
+        raw_tx = alice.createrawtransaction(inputs=[unspents[0], unspents[2]], outputs=[{alice.getnewaddress() : 49.999}])
+        tx1_conflict = alice.signrawtransactionwithwallet(raw_tx)['hex']
+
+        raw_tx = alice.createrawtransaction(inputs=[unspents[2]], outputs=[{alice.getnewaddress() : 24.99}])
+        tx1_conflict_conflict = alice.signrawtransactionwithwallet(raw_tx)['hex']
+
+        raw_tx = alice.createrawtransaction(inputs=[unspents[1]], outputs=[{bob.getnewaddress() : 24.9999}])
+        raw_tx2 = alice.signrawtransactionwithwallet(raw_tx)['hex']
+        tx2 = bob.sendrawtransaction(raw_tx2)
+
+        raw_tx = alice.createrawtransaction(inputs=[unspents[1]], outputs=[{alice.getnewaddress() : 24.9999}])
+        tx2_conflict = alice.signrawtransactionwithwallet(raw_tx)['hex']
+
+        bob_unspents = [{"txid" : element, "vout" : 0} for element in [tx1, tx2]]
+
+        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], Decimal("49.99989000"))
+
+        raw_tx = bob.createrawtransaction(inputs=[bob_unspents[0], bob_unspents[1]], outputs=[{bob.getnewaddress() : 49.999}])
+        raw_tx3 = bob.signrawtransactionwithwallet(raw_tx)['hex']
+        tx3 = bob.sendrawtransaction(raw_tx3)
+
+        self.disconnect_nodes(0, 1)
+
+        # alice has all 0 txs, bob has 3
+        assert_equal(len(alice.getrawmempool()), 0)
+        assert_equal(len(bob.getrawmempool()), 3)
+
+        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], Decimal("49.99900000"))
+
+        # bob broadcasts tx_1 conflict
+        tx1_conflict = bob.sendrawtransaction(tx1_conflict)
+        assert_equal(len(alice.getrawmempool()), 0)
+        assert_equal(len(bob.getrawmempool()), 2)
+
+        assert tx2 in bob.getrawmempool()
+        assert tx1_conflict in bob.getrawmempool()
+
+        # check that tx3 is now conflicted, so the output from tx2 can now be spent
+        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], Decimal("24.99990000"))
+
+        # we will be disconnecting this block in the future
+        tx2_conflict = alice.sendrawtransaction(tx2_conflict)
+        assert_equal(len(alice.getrawmempool()), 1)
+        blk = self.generate(self.nodes[0], 11, sync_fun=self.no_op)[0]
+        assert_equal(len(alice.getrawmempool()), 0)
+
+        # check that tx3 and tx1 are now conflicted
+        self.connect_nodes(0, 1)
+        self.sync_blocks()
+        assert_equal(alice.getbestblockhash(), bob.getbestblockhash())
+
+        assert tx1_conflict in bob.getrawmempool()
+        assert_equal(len(bob.getrawmempool()), 1)
+
+        assert_equal(bob.gettransaction(tx3)["confirmations"], -11)
+        # bob has no pending funds, since tx1, tx2, and tx3 are all conflicted
+        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], 0)
+        bob.invalidateblock(blk)
+        # bob should still have no pending funds because tx1 and tx3 are still conflicted, and tx2 has not been re-broadcast
+        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], 0)
+        assert_equal(len(bob.getrawmempool()), 1)
+        assert_equal(bob.gettransaction(tx3)["confirmations"], 0)
+
+        bob.sendrawtransaction(raw_tx2)
+        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], Decimal("24.99990000"))
+
+        tx1_conflict_conflict = bob.sendrawtransaction(tx1_conflict_conflict)
+        bob.sendrawtransaction(raw_tx1)
+
+        # Now bob has no pending funds because tx1 and tx2 are spent by tx3, which hasn't been re-broadcast yet
+        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], 0)
+
+        bob.sendrawtransaction(raw_tx3)
+        assert_equal(len(bob.getrawmempool()), 4) # The mempool contains: tx1, tx2, tx1_conflict_conflict, tx3
+        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], Decimal("49.99900000"))
 
 if __name__ == '__main__':
     TxConflicts().main()
