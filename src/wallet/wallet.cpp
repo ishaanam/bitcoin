@@ -1417,6 +1417,42 @@ void CWallet::transactionAddedToMempool(const CTransactionRef& tx) {
     if (it != mapWallet.end()) {
         RefreshMempoolStatus(it->second, chain());
     }
+
+    bool add_tx = false;
+
+    // Check if this transaction conflicts with any wallet txs
+    for (const CTxIn& tx_in : tx->vin) {
+        if (mapTxSpends.count(tx_in.prevout) < 1) continue;
+
+        std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(tx_in.prevout);
+
+        for (TxSpends::const_iterator _it = range.first; _it != range.second; ++_it) {
+            auto entry = mapWallet.find(_it->second);
+            if (_it->second == tx->GetHash() || entry == mapWallet.end()) continue;
+
+            CWalletTx& wtx = entry->second;
+
+            // This means that this tx is conflicting with one of our wallet transactions
+            add_tx = true;
+
+            auto get_updated_state = [&](CWalletTx& wtx) {
+                if(wtx.isInactive()) {
+                    wtx.m_state = TxStateMempoolConflicted{};
+                    return true;
+                }
+                return false;
+            };
+
+            RecursiveUpdateTxState(wtx.tx->GetHash(), get_updated_state);
+        }
+    }
+
+    // add tx spends to mapTxSpends (all for now, only relevant in the future)
+    if (add_tx) {
+        for (const CTxIn& tx_in : tx->vin) {
+            AddToSpends(tx_in.prevout, tx->GetHash());
+        }
+    }
 }
 
 void CWallet::transactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRemovalReason reason) {
@@ -1454,6 +1490,35 @@ void CWallet::transactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRe
         // https://github.com/bitcoin-core/bitcoin-devwiki/wiki/Wallet-Transaction-Conflict-Tracking
         SyncTransaction(tx, TxStateInactive{});
     }
+
+    // Check if this tx conflicts with any wallet txs
+    for (const CTxIn& tx_in : tx->vin) {
+        // for each conflicted tx, try to get mapWallet entry:
+        std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(tx_in.prevout);
+
+        for (TxSpends::const_iterator _it = range.first; _it != range.second; ++_it) {
+            auto entry = mapWallet.find(_it->second);
+            if (_it->second == tx->GetHash() || entry == mapWallet.end()) continue;
+
+            CWalletTx& wtx = entry->second;
+
+            auto get_updated_state = [&](CWalletTx& wtx) {
+                if (!wtx.isMempoolConflicted()) return false;
+
+                if (HasMempoolConflicts(wtx)) {
+                    // This would mean that this tx has conflicts other than the one which was just
+                    // removed from the mempool
+                    return false;
+                } else {
+                    // This tx no longer has any mempool conflicts
+                    wtx.m_state = TxStateInactive{};
+                    return true;
+                }
+            };
+
+            RecursiveUpdateTxState(wtx.tx->GetHash(), get_updated_state);
+        }
+    }
 }
 
 void CWallet::blockConnected(const interfaces::BlockInfo& block)
@@ -1488,20 +1553,27 @@ void CWallet::blockDisconnected(const interfaces::BlockInfo& block)
 
         for (const CTxIn& tx_in : ptx->vin) {
             // No other wallet transactions conflicted with this transaction
-            if (mapTxSpends.count(tx_in.prevout) <= 1) continue;
+            if (mapTxSpends.count(tx_in.prevout) < 1) continue;
 
             std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(tx_in.prevout);
 
             // For all of the spends that conflict with this transaction
             for (TxSpends::const_iterator _it = range.first; _it != range.second; ++_it) {
-                CWalletTx& wtx = mapWallet.find(_it->second)->second;
+                auto entry = mapWallet.find(_it->second);
+                if (entry == mapWallet.end()) continue;
+                CWalletTx& wtx = entry->second;
 
-                if (!wtx.isConflicted()) continue;
+                if (!wtx.isBlockConflicted()) continue;
 
                 auto try_updating_state = [&](CWalletTx& wtx) {
                     if (!wtx.isConflicted()) return false;
                     if (wtx.state<TxStateConflicted>()->conflicting_block_height >= disconnect_height) {
-                        wtx.m_state = TxStateInactive{};
+                        // make sure that the tx has no mempool conflicts
+                        if (HasMempoolConflicts(wtx)) {
+                            wtx.m_state = TxStateMempoolConflicted{};
+                        } else {
+                            wtx.m_state = TxStateInactive{};
+                        }
                         return true;
                     }
                     return false;
