@@ -308,6 +308,10 @@ Result CreateRateBumpTransaction(CWallet& wallet, const uint256& txid, const CCo
     // Write back transaction
     mtx = CMutableTransaction(*txr.tx);
 
+    // Set the locktime of the new transaction to the same 
+    // locktime as the transaction being replaced
+    mtx.nLockTime = wtx.tx->nLockTime;
+
     return Result::OK;
 }
 
