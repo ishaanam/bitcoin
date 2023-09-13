@@ -97,7 +97,7 @@ class WalletEncryptionTest(BitcoinTestFramework):
         self.nodes[0].walletpassphrasechange(passphrase2, passphrase_with_nulls)
         # walletpassphrasechange should not stop at null characters
         assert_raises_rpc_error(-14, "wallet passphrase entered was incorrect", self.nodes[0].walletpassphrase, passphrase_with_nulls.partition("\0")[0], 10)
-        self.nodes[0].walletpassphrase(passphrase_with_nulls, 10)
+        self.nodes[0].walletpassphrase(passphrase_with_nulls, 0)
         sig = self.nodes[0].signmessage(address, msg)
         assert self.nodes[0].verifymessage(address, sig, msg)
         self.nodes[0].walletlock()
