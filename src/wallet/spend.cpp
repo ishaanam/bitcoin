@@ -12,6 +12,7 @@
 #include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
+#include <script/sign.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
 #include <util/check.h>
@@ -252,6 +253,24 @@ static OutputType GetOutputType(TxoutType type, bool is_from_p2sh)
     }
 }
 
+TimeLockManager GetTimeLocks(const CWallet* wallet, bool solvable, const CScript& script_pubkey, int depth) {
+    if (solvable) {
+        std::unique_ptr<SigningProvider> provider = wallet->GetSolvingProvider(script_pubkey);
+        std::unique_ptr<Descriptor> descriptor = InferDescriptor(script_pubkey, *provider);
+        if (descriptor) {
+            uint32_t max_locktime_height = wallet->GetLastBlockHeight();
+            const uint256& latest_block_hash = wallet->GetLastBlockHash();
+            int64_t max_locktime_mtp;
+            wallet->chain().findBlock(latest_block_hash, FoundBlock().mtpTime(max_locktime_mtp));
+            const uint32_t max_sequence = depth;
+
+            return descriptor->GetTimeLocks(max_locktime_height, max_locktime_mtp, max_sequence);
+        }
+    }
+
+    return TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)});
+}
+
 // Fetch and validate the coin control selected inputs.
 // Coins could be internal (from the wallet) or external.
 util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const CCoinControl& coin_control,
@@ -426,15 +445,19 @@ CoinsResult AvailableCoins(const CWallet& wallet,
             // this from the redeemScript. If the output is not solvable, it will be classified
             // as a P2SH (legacy), since we have no way of knowing otherwise without the redeemScript
             bool is_from_p2sh{false};
+            CScript script;
             if (type == TxoutType::SCRIPTHASH && solvable) {
-                CScript script;
                 if (!provider->GetCScript(CScriptID(uint160(script_solutions[0])), script)) continue;
                 type = Solver(script, script_solutions);
                 is_from_p2sh = true;
             }
 
+            TimeLockManager time_lock_manager = GetTimeLocks(&wallet, solvable, output.scriptPubKey, nDepth);
+
+            if (!time_lock_manager.HasSpendingPath()) continue;
+
             result.Add(GetOutputType(type, is_from_p2sh),
-                       COutput(outpoint, output, nDepth, input_bytes, spendable, solvable, safeTx, wtx.GetTxTime(), tx_from_me, feerate));
+                       COutput(outpoint, output, nDepth, input_bytes, spendable, solvable, safeTx, wtx.GetTxTime(), tx_from_me, feerate, time_lock_manager));
 
             outpoints.push_back(outpoint);
 
@@ -822,11 +845,11 @@ util::Result<SelectionResult> AutomaticCoinSelection(const CWallet& wallet, Coin
             // If partial groups are allowed, relax the requirement of spending OutputGroups (groups
             // of UTXOs sent to the same address, which are obviously controlled by a single wallet)
             // in their entirety.
-            ordered_filters.push_back({CoinEligibilityFilter(0, 1, max_ancestors-1, max_descendants-1, /*include_partial=*/true)});
+            ordered_filters.push_back({CoinEligibilityFilter(0, 1, max_ancestors-1, max_descendants-1, /*include_partial=*/true, TimeLockType::NO_TIMELOCKS)});
             // Try with unsafe inputs if they are allowed. This may spend unconfirmed outputs
             // received from other wallets.
             if (coin_selection_params.m_include_unsafe_inputs) {
-                ordered_filters.push_back({CoinEligibilityFilter(/*conf_mine=*/0, /*conf_theirs*/0, max_ancestors-1, max_descendants-1, /*include_partial=*/true)});
+                ordered_filters.push_back({CoinEligibilityFilter(/*conf_mine=*/0, /*conf_theirs*/0, max_ancestors-1, max_descendants-1, /*include_partial=*/true, TimeLockType::NO_TIMELOCKS)});
             }
             // Try with unlimited ancestors/descendants. The transaction will still need to meet
             // mempool ancestor/descendant policy to be accepted to mempool and broadcasted, but
@@ -834,7 +857,7 @@ util::Result<SelectionResult> AutomaticCoinSelection(const CWallet& wallet, Coin
             if (!fRejectLongChains) {
                 ordered_filters.push_back({CoinEligibilityFilter(0, 1, std::numeric_limits<uint64_t>::max(),
                                                                    std::numeric_limits<uint64_t>::max(),
-                                                                   /*include_partial=*/true)});
+                                                                   /*include_partial=*/true, TimeLockType::NO_TIMELOCKS)});
             }
         }
 

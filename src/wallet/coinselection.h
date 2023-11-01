@@ -11,6 +11,7 @@
 #include <policy/feerate.h>
 #include <primitives/transaction.h>
 #include <random.h>
+#include <script/sign.h>
 #include <util/check.h>
 #include <util/insert.h>
 #include <util/result.h>
@@ -23,6 +24,7 @@ namespace wallet {
 static constexpr CAmount CHANGE_LOWER{50000};
 //! upper bound for randomly-chosen target change amount
 static constexpr CAmount CHANGE_UPPER{1000000};
+
 
 /** A UTXO under consideration for use in funding a new transaction. */
 struct COutput {
@@ -69,13 +71,19 @@ public:
     /** Whether the transaction containing this output is sent from the owning wallet */
     bool from_me;
 
+    /** The time lock information about a transaction. Even if there are not time locks, we make note of that here */
+    TimeLockManager time_lock_manager;
+
     /** The fee required to spend this output at the consolidation feerate. */
     CAmount long_term_fee{0};
 
     /** The fee necessary to bump this UTXO's ancestor transactions to the target feerate */
     CAmount ancestor_bump_fees{0};
 
-    COutput(const COutPoint& outpoint, const CTxOut& txout, int depth, int input_bytes, bool spendable, bool solvable, bool safe, int64_t time, bool from_me, const std::optional<CFeeRate> feerate = std::nullopt)
+    COutput(const COutPoint& outpoint, const CTxOut& txout, int depth, int input_bytes, bool spendable,
+            bool solvable, bool safe, int64_t time, bool from_me,
+            const std::optional<CFeeRate> feerate = std::nullopt,
+            const TimeLockManager time_lock_manager = TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)}))
         : outpoint{outpoint},
           txout{txout},
           depth{depth},
@@ -84,7 +92,8 @@ public:
           solvable{solvable},
           safe{safe},
           time{time},
-          from_me{from_me}
+          from_me{from_me},
+          time_lock_manager{time_lock_manager}
     {
         if (feerate) {
             // base fee without considering potential unconfirmed ancestors
@@ -209,15 +218,17 @@ struct CoinEligibilityFilter
     const uint64_t max_descendants;
     /** When avoid_reuse=true and there are full groups (OUTPUT_GROUP_MAX_ENTRIES), whether or not to use any partial groups.*/
     const bool m_include_partial_groups{false};
+    /** The type of timelocks, if any, being used */
+    const TimeLockType time_lock_type{NO_TIMELOCKS};
 
     CoinEligibilityFilter() = delete;
     CoinEligibilityFilter(int conf_mine, int conf_theirs, uint64_t max_ancestors) : conf_mine(conf_mine), conf_theirs(conf_theirs), max_ancestors(max_ancestors), max_descendants(max_ancestors) {}
     CoinEligibilityFilter(int conf_mine, int conf_theirs, uint64_t max_ancestors, uint64_t max_descendants) : conf_mine(conf_mine), conf_theirs(conf_theirs), max_ancestors(max_ancestors), max_descendants(max_descendants) {}
-    CoinEligibilityFilter(int conf_mine, int conf_theirs, uint64_t max_ancestors, uint64_t max_descendants, bool include_partial) : conf_mine(conf_mine), conf_theirs(conf_theirs), max_ancestors(max_ancestors), max_descendants(max_descendants), m_include_partial_groups(include_partial) {}
+    CoinEligibilityFilter(int conf_mine, int conf_theirs, uint64_t max_ancestors, uint64_t max_descendants, bool include_partial, TimeLockType time_lock_type) : conf_mine(conf_mine), conf_theirs(conf_theirs), max_ancestors(max_ancestors), max_descendants(max_descendants), m_include_partial_groups(include_partial), time_lock_type(time_lock_type) {}
 
     bool operator<(const CoinEligibilityFilter& other) const {
-        return std::tie(conf_mine, conf_theirs, max_ancestors, max_descendants, m_include_partial_groups)
-               < std::tie(other.conf_mine, other.conf_theirs, other.max_ancestors, other.max_descendants, other.m_include_partial_groups);
+        return std::tie(conf_mine, conf_theirs, max_ancestors, max_descendants, m_include_partial_groups, time_lock_type)
+               < std::tie(other.conf_mine, other.conf_theirs, other.max_ancestors, other.max_descendants, other.m_include_partial_groups, other.time_lock_type);
     }
 };
 

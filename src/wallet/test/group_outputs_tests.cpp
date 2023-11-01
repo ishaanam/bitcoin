@@ -223,7 +223,7 @@ BOOST_AUTO_TEST_CASE(outputs_grouping_tests)
             /*positive_only=*/ false);
 
     // Include partial groups should add one more group inside the "avoid partial spends" count
-    const CoinEligibilityFilter& avoid_partial_groups_filter{1, 6, 0, 0, /*include_partial=*/ true};
+    const CoinEligibilityFilter& avoid_partial_groups_filter{1, 6, 0, 0, /*include_partial=*/ true, TimeLockType::NO_TIMELOCKS};
     group_verifier.GroupAndVerify(OutputType::BECH32,
             avoid_partial_groups_filter,
             /*expected_with_partial_spends_size=*/ PREVIOUS_ROUND_COUNT + NUM_SINGLE_ENTRIES,

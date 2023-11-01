@@ -181,6 +181,13 @@ public:
         return GetType(type).has_value();
     }
 
+    bool CanSpend(TimeLockType type) const{
+        if (HasType(TimeLockType::NO_TIMELOCKS)) {
+            return true;
+        }
+        return GetType(type).has_value();
+    }
+
     void Update(TimeLock time_lock) {
         auto it = std::find(time_locks.begin(), time_locks.end(), TimeLock(time_lock.type));
         if (it != std::end(time_locks)) {
