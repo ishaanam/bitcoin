@@ -158,6 +158,8 @@ struct Descriptor {
 
     /** Get the maximum size number of stack elements for satisfying this descriptor. */
     virtual std::optional<int64_t> MaxSatisfactionElems() const = 0;
+
+    virtual TimeLockManager GetTimeLocks(uint32_t max_locktime_height, uint32_t max_locktime_mtp, uint32_t max_sequence_depth) const = 0;
 };
 
 /** Parse a `descriptor` string. Included private keys are put in `out`.

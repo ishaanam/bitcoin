@@ -19,6 +19,7 @@
 #include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
+#include <script/sign.h>
 #include <span.h>
 #include <util/check.h>
 #include <util/spanparsing.h>
@@ -1601,6 +1602,61 @@ public:
 
     //! Check whether there is no satisfaction path that contains both timelocks and heightlocks
     bool CheckTimeLocksMix() const { return GetType() << "k"_mst; }
+
+    //! good description
+    TimeLockManager GetTimeLocks(uint32_t max_locktime_height, uint32_t max_locktime_mtp, uint32_t max_sequence_depth) const {
+
+        auto upfn = [max_locktime_height, max_locktime_mtp, max_sequence_depth](const Node& node, Span<TimeLockManager> subs) -> TimeLockManager {
+            // basically just copy however "k"_mst is evaluated
+
+            // TODO: implement THRESH and ANDOR
+            switch (node.fragment) {
+                case Fragment::OLDER: {
+                    // OP_CSV
+                    if (node.k <= max_sequence_depth) {
+                        return TimeLockManager({TimeLock(TimeLockType::SEQUENCE_DEPTH, node.k)});
+                    }
+                    return TimeLockManager();
+                }
+                case Fragment::AFTER: {
+                    // OP_CLTV
+                    if (node.k < LOCKTIME_THRESHOLD) {
+                        if (node.k <= max_locktime_height) {
+                            return TimeLockManager({TimeLock(TimeLockType::LOCKTIME_HEIGHT, node.k)});
+                        }
+                    } else {
+                        if (node.k <= max_locktime_mtp) {
+                            return TimeLockManager({TimeLock(TimeLockType::LOCKTIME_MTP, node.k)});
+                        }
+                    }
+                    return TimeLockManager();
+                }
+                case Fragment::AND_V:
+                case Fragment::AND_B: {
+                    Assume(subs.size() == 2);
+                    return subs[0].And(subs[1]);
+                }
+                case Fragment::OR_B:
+                case Fragment::OR_D:
+                case Fragment::OR_C:
+                case Fragment::OR_I: {
+                    Assume(subs.size() == 2);
+                    return subs[0].Or(subs[1]);
+                }
+                case Fragment::THRESH: {
+                    std::vector<TimeLockManager> time_lock_managers;
+                    for (long unsigned int i = 0; i < subs.size(); i++) {
+                        time_lock_managers.push_back(subs[i]);
+                    }
+                    return TimeLockManager::Thresh(time_lock_managers, node.k);
+                }
+                default:
+                    return TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)});
+            }
+        };
+
+        return TreeEval<TimeLockManager>(upfn);
+    }
 
     //! Check whether there is no duplicate key across this fragment and all its sub-fragments.
     bool CheckDuplicateKey() const { return has_duplicate_keys && !*has_duplicate_keys; }

@@ -34,6 +34,9 @@ public:
     std::optional<int64_t> ScriptSize() const override { return {}; }
     std::optional<int64_t> MaxSatisfactionWeight(bool) const override { return {}; }
     std::optional<int64_t> MaxSatisfactionElems() const override { return {}; }
+    TimeLockManager GetTimeLocks(uint32_t max_locktime_height, uint32_t max_locktime_mtp, uint32_t max_sequence_depth) const override {
+        return TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)});
+    }
 };
 
 BOOST_FIXTURE_TEST_CASE(wallet_load_descriptors, TestingSetup)
