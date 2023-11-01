@@ -126,4 +126,100 @@ bool IsSegWitOutput(const SigningProvider& provider, const CScript& script);
 /** Sign the CMutableTransaction */
 bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* provider, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors);
 
+enum TimeLockType : int {
+    NO_TIMELOCKS = 0,
+    SEQUENCE = 1,
+    LOCKTIME_HEIGHT = 2,
+    LOCKTIME_MTP = 3
+};
+
+struct TimeLock {
+    TimeLockType type;
+    std::optional<uint32_t> value; // This will only contain a value if type is NO_TIMELOCKS
+
+    TimeLock(TimeLockType type, std::optional<uint32_t> value = std::nullopt) 
+      : type{type},
+        value{value}
+        {}
+
+    bool operator<(const TimeLock& other) const {
+        return type < other.type;
+    }
+
+    // It is important to note that two TimeLocks are considered equal
+    // if they are of the same type, regardless of their values
+    bool operator==(const TimeLock& other) const {
+        return type == other.type;
+    }
+
+};
+
+struct TimeLockManager {
+protected:
+    std::set<TimeLock> time_locks;
+public:
+    TimeLockManager() {}
+
+    TimeLockManager(std::set<TimeLock> time_locks)
+      : time_locks{time_locks}
+      {}
+
+    bool HasSpendingPath() const {
+        return !time_locks.empty();
+    }
+
+    std::optional<TimeLock> GetType(TimeLockType type) const {
+        auto it = std::find(time_locks.begin(), time_locks.end(), TimeLock(type));
+
+        if (it != std::end(time_locks)) {
+            return *it;
+        }
+        return std::nullopt;
+    }
+
+    bool HasType(TimeLockType type) const{
+        return GetType(type).has_value();
+    }
+
+    void Update(TimeLock time_lock) {
+        auto it = std::find(time_locks.begin(), time_locks.end(), TimeLock(time_lock.type));
+        if (it != std::end(time_locks)) {
+            if (it->value >= time_lock.value) return; // should not update as new value is smaller
+            time_locks.erase(it);
+        }
+        time_locks.insert(time_lock);
+    }
+
+    void Update(const TimeLockManager& time_lock_manager) {
+        for (const TimeLock& time_lock : time_lock_manager.time_locks) {
+            Update(time_lock);
+        }
+    }
+
+    TimeLockManager Combine(const TimeLockManager& other, bool required) const {
+        TimeLockManager time_lock_manager;
+
+        if (required) { // AND
+            if (HasType(NO_TIMELOCKS)) {
+                time_lock_manager.Update(other);
+            }
+            if (other.HasType(NO_TIMELOCKS)) {
+                time_lock_manager.Update(*this);
+            }
+            for (const TimeLock& time_lock : time_locks) {
+                if (auto other_time_lock = other.GetType(time_lock.type)) {
+                    time_lock_manager.Update(time_lock);
+                    time_lock_manager.Update(*other_time_lock);
+                }
+            }
+        } else { // OR
+            time_lock_manager.Update(*this);
+
+            time_lock_manager.Update(other);
+        }
+
+        return time_lock_manager;
+    }
+};
+
 #endif // BITCOIN_SCRIPT_SIGN_H
