@@ -19,6 +19,7 @@
 #include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
+#include <script/sign.h>
 #include <span.h>
 #include <util/check.h>
 #include <util/spanparsing.h>
@@ -1601,6 +1602,68 @@ public:
 
     //! Check whether there is no satisfaction path that contains both timelocks and heightlocks
     bool CheckTimeLocksMix() const { return GetType() << "k"_mst; }
+
+    //! good description
+    TimeLockManager GetTimeLocks(uint32_t max_locktime_height, uint32_t max_locktime_mtp, uint32_t max_sequence) const {
+
+        auto upfn = [&](const Node& node, Span<TimeLockManager> subs) -> TimeLockManager {
+            // basically just copy however "k"_mst is evaluated
+
+            switch (node.fragment) {
+                case Fragment::OLDER: {
+                    // OP_CSV
+                    if (k <= max_sequence) {
+                        return TimeLockManager({TimeLock(TimeLockType::SEQUENCE, node.k)});
+                    }
+                    return TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)});
+                }
+                case Fragment::AFTER: {
+                    // OP_CLTV
+                    if (node.k < LOCKTIME_THRESHOLD) {
+                        if (k <= max_locktime_height) {
+                            return TimeLockManager({TimeLock(TimeLockType::LOCKTIME_HEIGHT, node.k)});
+                        }
+                    } else {
+                        if (k <= max_locktime_mtp) {
+                            return TimeLockManager({TimeLock(TimeLockType::LOCKTIME_MTP, node.k)});
+                        }
+                    }
+                    return TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)});
+                }
+                case Fragment::THRESH: {
+                    // INCORRECT
+                    TimeLockManager time_lock_manager;
+                    /*
+                    for (const TimeLockManager& sub : subs) {
+                        for (const TimeLock& time_lock : sub) {
+                            time_lock_manager.Update(time_lock);
+                        }
+                    }
+                    */
+                    return time_lock_manager;
+                }
+                case Fragment::AND_V:
+                case Fragment::AND_B: {
+                    Assume(subs.size() == 2);
+                    return subs[0].Combine(subs[1], /*require=*/true);
+                }
+                case Fragment::OR_B:
+                case Fragment::OR_D:
+                case Fragment::OR_C:
+                case Fragment::OR_I: {
+                    Assume(subs.size() == 2);
+                    return subs[0].Combine(subs[1], /*require=*/false);
+                }
+                case Fragment::ANDOR: {
+                    return subs[0].Combine(subs[1], /*require=*/true).Combine(subs[2], /*require=*/false);
+                }
+                default:
+                    return TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)});
+            }
+        };
+
+        return TreeEval<TimeLockManager>(upfn);
+    }
 
     //! Check whether there is no duplicate key across this fragment and all its sub-fragments.
     bool CheckDuplicateKey() const { return has_duplicate_keys && !*has_duplicate_keys; }

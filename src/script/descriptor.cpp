@@ -720,6 +720,10 @@ public:
     std::optional<int64_t> MaxSatisfactionWeight(bool) const override { return {}; }
 
     std::optional<int64_t> MaxSatisfactionElems() const override { return {}; }
+
+    TimeLockManager GetTimeLocks(uint32_t max_locktime_height, uint32_t max_locktime_mtp, uint32_t max_sequence) const override {
+        return TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)});
+    }
 };
 
 /** A parsed addr(A) descriptor. */
@@ -1036,6 +1040,10 @@ public:
         if (const auto sub_elems = m_subdescriptor_args[0]->MaxSatisfactionElems()) return 1 + *sub_elems;
         return {};
     }
+
+    TimeLockManager GetTimeLocks(uint32_t max_locktime_height, uint32_t max_locktime_mtp, uint32_t max_sequence) const final {
+        return m_subdescriptor_args.at(0)->GetTimeLocks(max_locktime_height, max_locktime_mtp, max_sequence);
+    }
 };
 
 /** A parsed tr(...) descriptor. */
@@ -1218,6 +1226,10 @@ public:
 
     std::optional<int64_t> MaxSatisfactionElems() const override {
         return m_node->GetStackSize();
+    }
+
+    TimeLockManager GetTimeLocks(uint32_t max_locktime_height, uint32_t max_locktime_mtp, uint32_t max_sequence) const final {
+        return m_node->GetTimeLocks(max_locktime_height, max_locktime_mtp, max_sequence);
     }
 };
 
