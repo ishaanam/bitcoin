@@ -126,4 +126,161 @@ bool IsSegWitOutput(const SigningProvider& provider, const CScript& script);
 /** Sign the CMutableTransaction */
 bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* provider, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors);
 
+enum TimeLockType : int {
+    NO_TIMELOCKS = 0,
+    SEQUENCE_DEPTH = 1,
+    SEQUENCE_MTP = 2,
+    LOCKTIME_HEIGHT = 3,
+    LOCKTIME_MTP = 4
+};
+
+struct TimeLock {
+    TimeLockType type;
+    std::optional<uint32_t> value; // This will only contain a value if type is NO_TIMELOCKS
+
+    TimeLock(TimeLockType type, std::optional<uint32_t> value = std::nullopt) 
+      : type{type},
+        value{value}
+        {}
+
+    bool operator<(const TimeLock& other) const {
+        return type < other.type;
+    }
+
+    // It is important to note that two TimeLocks are considered equal
+    // if they are of the same type, regardless of their values
+    bool operator==(const TimeLock& other) const {
+        return type == other.type;
+    }
+
+};
+
+struct TimeLockManager {
+protected:
+    std::set<TimeLock> time_locks;
+public:
+    TimeLockManager() {}
+
+    TimeLockManager(std::set<TimeLock> time_locks)
+      : time_locks{time_locks}
+      {}
+
+    bool HasSpendingPath() const {
+        return !time_locks.empty();
+    }
+
+    std::optional<TimeLock> GetType(TimeLockType type) const {
+        auto it = std::find(time_locks.begin(), time_locks.end(), TimeLock(type));
+
+        if (it != std::end(time_locks)) {
+            return *it;
+        }
+        return std::nullopt;
+    }
+
+    bool HasType(TimeLockType type) const{
+        return GetType(type).has_value();
+    }
+
+    void Update(TimeLock time_lock) {
+        auto it = std::find(time_locks.begin(), time_locks.end(), TimeLock(time_lock.type));
+        if (it != std::end(time_locks)) {
+            if (it->value >= time_lock.value) return; // should not update as new value is smaller
+            time_locks.erase(it);
+        }
+        time_locks.insert(time_lock);
+    }
+
+    void Update(const TimeLockManager& time_lock_manager) {
+        for (const TimeLock& time_lock : time_lock_manager.time_locks) {
+            Update(time_lock);
+        }
+    }
+
+    TimeLockManager And (const TimeLockManager& other) const {
+        std::vector<TimeLockManager> managers;
+        managers.push_back(*this);
+        managers.push_back(other);
+        return Thresh(managers, 2);
+    }
+
+    TimeLockManager Or(const TimeLockManager& other) const {
+        std::vector<TimeLockManager> managers;
+        managers.push_back(*this);
+        managers.push_back(other);
+        return Thresh(managers, 1);
+    }
+
+    static TimeLockManager Thresh(const std::vector<TimeLockManager> managers, int m) {
+        TimeLockManager time_lock_manager;
+        TimeLockManager temp_manager;
+
+        int num_no_timelocks{0};
+        int num_sequence_depth{0};
+        int num_sequence_mtp{0};
+        int num_locktime_height{0};
+        int num_locktime_mtp{0};
+
+        for (const TimeLockManager& manager : managers) {
+            for (const TimeLock& time_lock : manager.time_locks) {
+                temp_manager.Update(time_lock);
+                switch (time_lock.type) {
+                    case NO_TIMELOCKS :
+                        num_no_timelocks += 1;
+                        break;
+                    case SEQUENCE_DEPTH :
+                        num_sequence_depth += 1;
+                        break;
+                    case SEQUENCE_MTP :
+                        num_sequence_mtp += 1;
+                        break;
+                    case LOCKTIME_HEIGHT : 
+                        num_locktime_height += 1;
+                        break;
+                    case LOCKTIME_MTP : 
+                        num_locktime_mtp += 1;
+                        break;
+                    default:
+                        assert(false);
+                }
+            }
+        }
+
+        for (const TimeLockManager& manager : managers) {
+            if (manager.HasType(NO_TIMELOCKS)) {
+                if (num_sequence_depth > 0 && !manager.HasType(SEQUENCE_DEPTH)) {
+                    num_sequence_depth++;
+                }
+                if (num_sequence_mtp > 0 && !manager.HasType(SEQUENCE_MTP)) {
+                    num_sequence_mtp++;
+                }
+                if (num_locktime_height > 0 && !manager.HasType(LOCKTIME_HEIGHT)) {
+                    num_locktime_height++;
+                }
+                if (num_locktime_mtp > 0 && !manager.HasType(LOCKTIME_MTP)) {
+                    num_locktime_mtp++;
+                }
+            }
+        }
+
+        if (num_no_timelocks >= m) {
+            time_lock_manager.Update(TimeLock(NO_TIMELOCKS));
+        }
+        if (num_sequence_depth >= m) {
+            time_lock_manager.Update(temp_manager.GetType(SEQUENCE_DEPTH).value());
+        }
+        if (num_sequence_mtp >= m) {
+            time_lock_manager.Update(temp_manager.GetType(SEQUENCE_MTP).value());
+        }
+        if (num_locktime_height >= m) {
+            time_lock_manager.Update(temp_manager.GetType(LOCKTIME_HEIGHT).value());
+        }
+        if (num_locktime_mtp >= m) {
+            time_lock_manager.Update(temp_manager.GetType(LOCKTIME_MTP).value());
+        }
+
+        return time_lock_manager;
+    }
+};
+
 #endif // BITCOIN_SCRIPT_SIGN_H
