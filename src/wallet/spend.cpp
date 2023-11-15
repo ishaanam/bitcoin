@@ -12,6 +12,7 @@
 #include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
+#include <script/sign.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
 #include <util/check.h>
@@ -253,6 +254,44 @@ static OutputType GetOutputType(TxoutType type, bool is_from_p2sh)
     }
 }
 
+TimeLockManager GetTimeLocks(const CWallet* wallet, bool solvable, const CTxOut& tx_out, const COutPoint& outpoint, int depth, const CCoinControl* coin_control) {
+    const CScript& script_pubkey = tx_out.scriptPubKey;
+    if (solvable) {
+        std::unique_ptr<SigningProvider> provider = wallet->GetSolvingProvider(script_pubkey);
+        if (provider) {
+            std::unique_ptr<Descriptor> descriptor = InferDescriptor(script_pubkey, *provider);
+
+            if (descriptor) {
+                uint32_t max_locktime_height;
+                if (coin_control && coin_control->m_locktime && coin_control->m_locktime.value() < LOCKTIME_THRESHOLD) {
+                    max_locktime_height = coin_control->m_locktime.value();
+                } else {
+                    max_locktime_height = wallet->GetLastBlockHeight();
+                }
+
+                int64_t max_locktime_mtp;
+                if (coin_control && coin_control->m_locktime && coin_control->m_locktime.value() >= LOCKTIME_THRESHOLD) {
+                    max_locktime_mtp = coin_control->m_locktime.value();
+                } else {
+                    const uint256& latest_block_hash = wallet->GetLastBlockHash();
+                    wallet->chain().findBlock(latest_block_hash, FoundBlock().mtpTime(max_locktime_mtp));
+                }
+
+                uint32_t max_sequence_depth;
+                if (coin_control && coin_control->GetSequence(outpoint)) {
+                    max_sequence_depth = coin_control->GetSequence(outpoint).value();
+                } else {
+                    max_sequence_depth = depth;
+                }
+
+                return descriptor->GetTimeLocks(max_locktime_height, max_locktime_mtp, max_sequence_depth);
+            }
+        }
+    }
+
+    return TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)});
+}
+
 // Fetch and validate the coin control selected inputs.
 // Coins could be internal (from the wallet) or external.
 util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const CCoinControl& coin_control,
@@ -294,8 +333,17 @@ util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const
             return util::Error{strprintf(_("Not solvable pre-selected input %s"), outpoint.ToString())}; // Not solvable, can't estimate size for fee
         }
 
+        // the output must be solvable if input_bytes != -1
+        TimeLockManager time_lock_manager = TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)});
+        if (auto ptr_wtx = wallet.GetWalletTx(outpoint.hash)) {
+            time_lock_manager = GetTimeLocks(&wallet, /*solvable=*/true, txout, outpoint, wallet.GetTxDepthInMainChain(*ptr_wtx), &coin_control);
+            if (!time_lock_manager.HasSpendingPath()) {
+                return util::Error{strprintf(_("UTXO can't be spent right now because of immature time locks: %s"), outpoint.ToString())};
+            }
+        }
+
         /* Set some defaults for depth, spendable, solvable, safe, time, and from_me as these don't matter for preset inputs since no selection is being done. */
-        COutput output(outpoint, txout, /*depth=*/ 0, input_bytes, /*spendable=*/ true, /*solvable=*/ true, /*safe=*/ true, /*time=*/ 0, /*from_me=*/ false, coin_selection_params.m_effective_feerate);
+        COutput output(outpoint, txout, /*depth=*/ 0, input_bytes, /*spendable=*/ true, /*solvable=*/ true, /*safe=*/ true, /*time=*/ 0, /*from_me=*/ false, coin_selection_params.m_effective_feerate, time_lock_manager);
         output.ApplyBumpFee(map_of_bump_fees.at(output.outpoint));
         result.Insert(output, coin_selection_params.m_subtract_fee_outputs);
     }
@@ -427,15 +475,19 @@ CoinsResult AvailableCoins(const CWallet& wallet,
             // this from the redeemScript. If the output is not solvable, it will be classified
             // as a P2SH (legacy), since we have no way of knowing otherwise without the redeemScript
             bool is_from_p2sh{false};
+            CScript script;
             if (type == TxoutType::SCRIPTHASH && solvable) {
-                CScript script;
                 if (!provider->GetCScript(CScriptID(uint160(script_solutions[0])), script)) continue;
                 type = Solver(script, script_solutions);
                 is_from_p2sh = true;
             }
 
+            TimeLockManager time_lock_manager = GetTimeLocks(&wallet, solvable, output, outpoint, nDepth, coinControl);
+
+            if (!time_lock_manager.HasSpendingPath()) continue;
+
             result.Add(GetOutputType(type, is_from_p2sh),
-                       COutput(outpoint, output, nDepth, input_bytes, spendable, solvable, safeTx, wtx.GetTxTime(), tx_from_me, feerate));
+                       COutput(outpoint, output, nDepth, input_bytes, spendable, solvable, safeTx, wtx.GetTxTime(), tx_from_me, feerate, time_lock_manager));
 
             outpoints.push_back(outpoint);
 

@@ -11,6 +11,7 @@
 #include <policy/feerate.h>
 #include <primitives/transaction.h>
 #include <random.h>
+#include <script/sign.h>
 #include <util/check.h>
 #include <util/insert.h>
 #include <util/result.h>
@@ -69,13 +70,19 @@ public:
     /** Whether the transaction containing this output is sent from the owning wallet */
     bool from_me;
 
+    /** The time lock information about a transaction. Even if there are not time locks, we make note of that here */
+    TimeLockManager time_lock_manager;
+
     /** The fee required to spend this output at the consolidation feerate. */
     CAmount long_term_fee{0};
 
     /** The fee necessary to bump this UTXO's ancestor transactions to the target feerate */
     CAmount ancestor_bump_fees{0};
 
-    COutput(const COutPoint& outpoint, const CTxOut& txout, int depth, int input_bytes, bool spendable, bool solvable, bool safe, int64_t time, bool from_me, const std::optional<CFeeRate> feerate = std::nullopt)
+    COutput(const COutPoint& outpoint, const CTxOut& txout, int depth, int input_bytes, bool spendable,
+            bool solvable, bool safe, int64_t time, bool from_me,
+            const std::optional<CFeeRate> feerate = std::nullopt,
+            const TimeLockManager time_lock_manager = TimeLockManager({TimeLock(TimeLockType::NO_TIMELOCKS)}))
         : outpoint{outpoint},
           txout{txout},
           depth{depth},
@@ -84,7 +91,8 @@ public:
           solvable{solvable},
           safe{safe},
           time{time},
-          from_me{from_me}
+          from_me{from_me},
+          time_lock_manager{time_lock_manager}
     {
         if (feerate) {
             // base fee without considering potential unconfirmed ancestors
