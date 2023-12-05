@@ -741,6 +741,28 @@ static void SetOptionsInputWeights(const UniValue& inputs, UniValue& options)
     options.pushKV("input_weights", weights);
 }
 
+static void SetInputSequences(const UniValue& inputs, CCoinControl& coin_control, const CMutableTransaction& raw_transaction) {
+    if (inputs.size() == 0) {
+        return;
+    }
+
+    for (int i = 0; i < inputs.size(); i++) {
+        const UniValue& input = inputs[i];
+        if (input.exists("sequence")) {
+            const UniValue& o = input.get_obj();
+            const UniValue& sequenceObj = o.find_value("sequence");
+
+            if (sequenceObj.isNum()) {
+                int64_t seqNr64 = sequenceObj.getInt<int64_t>();
+                uint32_t nSequence = (uint32_t)seqNr64;
+
+                PreselectedInput& preset_txin = coin_control.Select(raw_transaction.vin[i].prevout);
+                preset_txin.SetSequence(nSequence);
+            }
+        }
+    }
+}
+
 RPCHelpMan fundrawtransaction()
 {
     return RPCHelpMan{"fundrawtransaction",
@@ -1281,6 +1303,7 @@ RPCHelpMan send()
             // be overridden by options.add_inputs.
             coin_control.m_allow_other_inputs = rawTx.vin.size() == 0;
             SetOptionsInputWeights(options["inputs"], options);
+            SetInputSequences(options["inputs"], coin_control, rawTx);
             auto txr = FundTransaction(*pwallet, rawTx, options, coin_control, /*override_min_fee=*/false);
 
             return FinishTransaction(pwallet, options, CMutableTransaction(*txr.tx));
@@ -1716,6 +1739,7 @@ RPCHelpMan walletcreatefundedpsbt()
     // be overridden by options.add_inputs.
     coin_control.m_allow_other_inputs = rawTx.vin.size() == 0;
     SetOptionsInputWeights(request.params[0], options);
+    SetInputSequences(request.params[0], coin_control, rawTx);
     auto txr = FundTransaction(wallet, rawTx, options, coin_control, /*override_min_fee=*/true);
 
     // Make a blank psbt

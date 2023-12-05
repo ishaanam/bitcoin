@@ -1402,7 +1402,6 @@ util::Result<CreatedTransactionResult> FundTransaction(CWallet& wallet, const CM
             // The input was not in the wallet, but is in the UTXO set, so select as external
             preset_txin.SetTxOut(coins[outPoint].out);
         }
-        preset_txin.SetSequence(txin.nSequence);
         preset_txin.SetScriptSig(txin.scriptSig);
         preset_txin.SetScriptWitness(txin.scriptWitness);
     }
