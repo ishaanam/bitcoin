@@ -492,6 +492,12 @@ void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
         // for any reason except being included in a block. Clients interested
         // in transactions included in blocks can subscribe to the BlockConnected
         // notification.
+        // MEMPOOL_DATA: remove info of this tx from cache
+        {
+            LOCK(m_mempool_data_mutex);
+            // m_mempool_data.num_txs -= 1;
+        }
+
         GetMainSignals().TransactionRemovedFromMempool(it->GetSharedTx(), reason, mempool_sequence);
     }
     TRACE5(mempool, removed,

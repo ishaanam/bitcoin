@@ -14,6 +14,7 @@
 #include <kernel/mempool_limits.h>         // IWYU pragma: export
 #include <kernel/mempool_options.h>        // IWYU pragma: export
 #include <kernel/mempool_removal_reason.h> // IWYU pragma: export
+#include <mempooldata.h>
 #include <policy/feerate.h>
 #include <policy/packages.h>
 #include <primitives/transaction.h>
@@ -732,6 +733,10 @@ public:
     uint64_t GetSequence() const EXCLUSIVE_LOCKS_REQUIRED(cs) {
         return m_sequence_number;
     }
+
+    Mutex m_mempool_data_mutex;
+
+    MempoolData m_mempool_data GUARDED_BY(m_mempool_data_mutex);
 
 private:
     /** UpdateForDescendants is used by UpdateTransactionsFromBlock to update
