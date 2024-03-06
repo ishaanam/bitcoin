@@ -2778,11 +2778,11 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
         if (m_mempool->m_mempool_data.collect_data && m_mempool->m_mempool_data.num_txs > 0) {
             LogPrintf("MempoolData: num of txs: %i\n", m_mempool->m_mempool_data.num_txs);
             LogPrintf("FeerateBuckets: %s\n", m_mempool->m_mempool_data.feerate_buckets.toString());
-            m_mempool->m_mempool_data.num_txs = 0;
         } else if (m_mempool->m_mempool_data.num_txs > 0) {
             m_mempool->m_mempool_data.collect_data = true;
             LogPrintf("Starting mempool data collection\n");
         }
+        m_mempool->m_mempool_data.Clear();
     }
     UpdateTipLog(coins_tip, pindexNew, params, __func__, "", warning_messages.original);
 }

@@ -54,6 +54,11 @@ struct MempoolData {
     void AddTx(int range_value) {
         feerate_buckets.Update(range_value);
     }
+
+    void Clear() {
+        num_txs = 0;
+        feerate_buckets = Buckets(0, 600, 30);
+    }
 };
 
 #endif // BITCOIN_MEMPOOLDATA_H
