@@ -4288,7 +4288,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             {
                 LOCK(m_mempool.m_mempool_data_mutex);
                 m_mempool.m_mempool_data.num_txs += 1;
-                m_mempool.m_mempool_data.AddTx(result.m_effective_feerate.value().GetFee(1));
+                m_mempool.m_mempool_data.AddTx(result.m_effective_feerate.value().GetFee(1), result.m_vsize.value());
             }
 
             LogPrint(BCLog::MEMPOOL, "AcceptToMemoryPool: peer=%d: accepted %s (wtxid=%s) (poolsz %u txn, %u kB)\n",

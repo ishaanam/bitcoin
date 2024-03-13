@@ -18,7 +18,7 @@ std::string Buckets::toString() const {
 
 void Buckets::Update(int range_value) {
     if (range_value >= (max - increment)) {
-        map[NumRange(max - increment)] = range_value;
+        map[NumRange(max - increment)] += 1;
     } else {
         int min = (range_value - (range_value % increment));
         map[NumRange(min, min + increment)] += 1;

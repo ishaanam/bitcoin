@@ -49,15 +49,17 @@ struct MempoolData {
     int collect_data{false};
 
     Buckets feerate_buckets{0, 600, 30};
-    // Buckets size_buckets{};
+    Buckets size_buckets{0, 600, 20};
 
-    void AddTx(int range_value) {
-        feerate_buckets.Update(range_value);
+    void AddTx(int feerate, int size) {
+        feerate_buckets.Update(feerate);
+        size_buckets.Update(size);
     }
 
     void Clear() {
         num_txs = 0;
         feerate_buckets = Buckets(0, 600, 30);
+        size_buckets = Buckets(0, 600, 20);
     }
 };
 
