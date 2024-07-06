@@ -10,6 +10,7 @@ src/bitcoin-node
 src/bitcoin-tx
 src/bitcoin-util
 src/bitcoin-chainstate
+src/bitcoin-coinjoins
 src/bitcoin-wallet
 src/test/fuzz/fuzz
 src/test/test_bitcoin

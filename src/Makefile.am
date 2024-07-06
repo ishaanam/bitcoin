@@ -112,6 +112,10 @@ if BUILD_BITCOIN_CHAINSTATE
   bin_PROGRAMS += bitcoin-chainstate
 endif
 
+if BUILD_BITCOIN_COINJOINS
+  bin_PROGRAMS += bitcoin-coinjoins
+endif
+
 .PHONY: FORCE check-symbols check-security
 # bitcoin core #
 BITCOIN_CORE_H = \
@@ -907,6 +911,23 @@ bitcoin_chainstate_LDADD = $(LIBBITCOINKERNEL)
 # libsecp256k1 only needs to be linked in when libbitcoinkernel is static.
 bitcoin_chainstate_LDADD += $(LIBSECP256K1)
 #
+
+# bitcoin-coinjoins binary #
+bitcoin_coinjoins_SOURCES = bitcoin-coinjoins.cpp
+bitcoin_coinjoins_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES) $(BOOST_CPPFLAGS)
+bitcoin_coinjoins_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
+
+bitcoin_coinjoins_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(PTHREAD_FLAGS) $(LIBTOOL_APP_LDFLAGS) -static
+bitcoin_coinjoins_LDADD = $(LIBBITCOINKERNEL)
+
+# libtool is unable to calculate this indirect dependency, presumably because it's a subproject.
+# libsecp256k1 only needs to be linked in when libbitcoinkernel is static.
+bitcoin_coinjoins_LDADD += $(LIBSECP256K1)
+#
+
+# libtool is unable to calculate this indirect dependency, presumably because it's a subproject.
+# libsecp256k1 only needs to be linked in when libbitcoinkernel is static.
+bitcoin_coinjoins_LDADD += $(LIBSECP256K1)
 
 # bitcoinkernel library #
 if BUILD_BITCOIN_KERNEL_LIB
