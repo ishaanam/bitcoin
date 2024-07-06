@@ -36,6 +36,7 @@ BITCOIN_CLI_NAME=bitcoin-cli
 BITCOIN_TX_NAME=bitcoin-tx
 BITCOIN_UTIL_NAME=bitcoin-util
 BITCOIN_CHAINSTATE_NAME=bitcoin-chainstate
+BITCOIN_COINJOINS_NAME=bitcoin-coinjoins
 BITCOIN_WALLET_TOOL_NAME=bitcoin-wallet
 dnl Multi Process
 BITCOIN_MP_NODE_NAME=bitcoin-node
@@ -604,6 +605,12 @@ AC_ARG_ENABLE([experimental-util-chainstate],
   [build_bitcoin_chainstate=$enableval],
   [build_bitcoin_chainstate=no])
 
+AC_ARG_ENABLE([experimental-util-coinjoins],
+  [AS_HELP_STRING([--enable-experimental-util-coinjoins],
+  [build experimental bitcoin-coinjoins executable (default=no)])],
+  [build_bitcoin_coinjoins=$enableval],
+  [build_bitcoin_coinjoins=no])
+
 AC_ARG_WITH([experimental-kernel-lib],
   [AS_HELP_STRING([--with-experimental-kernel-lib],
   [build experimental bitcoinkernel library (default is to build if we're building the experimental build-chainstate executable)])],
@@ -1123,6 +1130,7 @@ if test "$enable_fuzz" = "yes"; then
   build_bitcoin_tx=no
   build_bitcoin_util=no
   build_bitcoin_chainstate=no
+  build_bitcoin_coinjoins=no
   build_bitcoin_wallet=no
   build_bitcoind=no
   bitcoin_enable_qt=no
@@ -1458,7 +1466,16 @@ fi
 AM_CONDITIONAL([BUILD_BITCOIN_CHAINSTATE], [test $build_bitcoin_chainstate = "yes"])
 AC_MSG_RESULT($build_bitcoin_chainstate)
 
-AM_CONDITIONAL([BUILD_BITCOIN_KERNEL_LIB], [test "$build_experimental_kernel_lib" != "no" && ( test "$build_experimental_kernel_lib" = "yes" || test "$build_bitcoin_chainstate" = "yes" )])
+AC_MSG_CHECKING([whether to build experimental bitcoin-coinjoins])
+if test "$build_bitcoin_coinjoins" = "yes"; then
+  if test "$build_experimental_kernel_lib" = "no"; then
+    AC_MSG_ERROR([experimental bitcoin-coinjoins cannot be built without the experimental bitcoinkernel library. Use --with-experimental-kernel-lib]);
+  fi
+fi
+AM_CONDITIONAL([BUILD_BITCOIN_COINJOINS], [test $build_bitcoin_coinjoins = "yes"])
+AC_MSG_RESULT($build_bitcoin_coinjoins)
+
+AM_CONDITIONAL([BUILD_BITCOIN_KERNEL_LIB], [test "$build_experimental_kernel_lib" != "no" && ( test "$build_experimental_kernel_lib" = "yes" || test "$build_bitcoin_chainstate" = "yes" || test "$build_bitcoin_coinjoins")])
 
 AC_LANG_POP
 
