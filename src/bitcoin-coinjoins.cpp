@@ -150,134 +150,46 @@ int main(int argc, char* argv[])
     }
 
     // Main program logic starts here
-    std::cout
-        << "Hello! I'm going to print out some information about your datadir." << std::endl
-        << "\t"
-        << "Path: " << abs_datadir << std::endl;
+
+    CBlockIndex* current_height;
+
     {
-        LOCK(chainman.GetMutex());
-        std::cout
-        << "\t" << "Blockfiles Indexed: " << std::boolalpha << chainman.m_blockman.m_blockfiles_indexed.load() << std::noboolalpha << std::endl
-        << "\t" << "Snapshot Active: " << std::boolalpha << chainman.IsSnapshotActive() << std::noboolalpha << std::endl
-        << "\t" << "Active Height: " << chainman.ActiveHeight() << std::endl
-        << "\t" << "Active IBD: " << std::boolalpha << chainman.IsInitialBlockDownload() << std::noboolalpha << std::endl;
-        CBlockIndex* tip = chainman.ActiveTip();
-        if (tip) {
-            std::cout << "\t" << tip->ToString() << std::endl;
-        }
+        LOCK(::cs_main);
+        current_height = chainman.m_blockman.LookupBlockIndex(uint256S("0000000000000000000682164224dc4979662b3824ccad634d52f1bd1a232b00"));
     }
 
-    for (std::string line; std::getline(std::cin, line);) {
-        if (line.empty()) {
-            std::cerr << "Empty line found" << std::endl;
-            break;
-        }
+    if (current_height) {
+        for (int i = 0; i < 10; i++) {
+            std::cout << "In Block: #" << current_height->nHeight << "\n";
 
-        std::shared_ptr<CBlock> blockptr = std::make_shared<CBlock>();
-        CBlock& block = *blockptr;
+            int num_whirlpool = 0;
+            CBlock block;
+            chainman.m_blockman.ReadBlockFromDisk(block, *current_height);
 
-        if (!DecodeHexBlk(block, line)) {
-            std::cerr << "Block decode failed" << std::endl;
-            break;
-        }
+            // eventually replace with some sort of CoinJoin criteria
 
-        if (block.vtx.empty() || !block.vtx[0]->IsCoinBase()) {
-            std::cerr << "Block does not start with a coinbase" << std::endl;
-            break;
-        }
+            for (const CTransactionRef& tx : block.vtx) {
+                if (tx->vin.size() == 5 && tx->vout.size() == 5) {
+                    int amount = tx->vout.at(0).nValue;
+                    bool same_amount = true;
 
-        uint256 hash = block.GetHash();
-        {
-            LOCK(cs_main);
-            const CBlockIndex* pindex = chainman.m_blockman.LookupBlockIndex(hash);
-            if (pindex) {
-                if (pindex->IsValid(BLOCK_VALID_SCRIPTS)) {
-                    std::cerr << "duplicate" << std::endl;
-                    break;
-                }
-                if (pindex->nStatus & BLOCK_FAILED_MASK) {
-                    std::cerr << "duplicate-invalid" << std::endl;
-                    break;
+                    for_each(tx->vout.begin(), tx->vout.end(), [amount, &same_amount](CTxOut tx_out) {
+                        same_amount &= amount == tx_out.nValue;
+                    });
+
+                    if (same_amount) {
+                        num_whirlpool += 1;
+                        std::cout << "\tWhirlpool Transaction: " << tx->GetHash().ToString() << "\n";
+                    }
                 }
             }
-        }
 
-        {
-            LOCK(cs_main);
-            const CBlockIndex* pindex = chainman.m_blockman.LookupBlockIndex(block.hashPrevBlock);
-            if (pindex) {
-                chainman.UpdateUncommittedBlockStructures(block, pindex);
-            }
-        }
+            std::cout << "\t" << num_whirlpool << " Whirlpool transactions\n";
 
-        // Adapted from rpc/mining.cpp
-        class submitblock_StateCatcher final : public CValidationInterface
-        {
-        public:
-            uint256 hash;
-            bool found;
-            BlockValidationState state;
+            // move to next block
+            current_height = current_height->pprev;
 
-            explicit submitblock_StateCatcher(const uint256& hashIn) : hash(hashIn), found(false), state() {}
-
-        protected:
-            void BlockChecked(const CBlock& block, const BlockValidationState& stateIn) override
-            {
-                if (block.GetHash() != hash)
-                    return;
-                found = true;
-                state = stateIn;
-            }
-        };
-
-        bool new_block;
-        auto sc = std::make_shared<submitblock_StateCatcher>(block.GetHash());
-        validation_signals.RegisterSharedValidationInterface(sc);
-        bool accepted = chainman.ProcessNewBlock(blockptr, /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/&new_block);
-        validation_signals.UnregisterSharedValidationInterface(sc);
-        if (!new_block && accepted) {
-            std::cerr << "duplicate" << std::endl;
-            break;
-        }
-        if (!sc->found) {
-            std::cerr << "inconclusive" << std::endl;
-            break;
-        }
-        std::cout << sc->state.ToString() << std::endl;
-        switch (sc->state.GetResult()) {
-        case BlockValidationResult::BLOCK_RESULT_UNSET:
-            std::cerr << "initial value. Block has not yet been rejected" << std::endl;
-            break;
-        case BlockValidationResult::BLOCK_HEADER_LOW_WORK:
-            std::cerr << "the block header may be on a too-little-work chain" << std::endl;
-            break;
-        case BlockValidationResult::BLOCK_CONSENSUS:
-            std::cerr << "invalid by consensus rules (excluding any below reasons)" << std::endl;
-            break;
-        case BlockValidationResult::BLOCK_RECENT_CONSENSUS_CHANGE:
-            std::cerr << "Invalid by a change to consensus rules more recent than SegWit." << std::endl;
-            break;
-        case BlockValidationResult::BLOCK_CACHED_INVALID:
-            std::cerr << "this block was cached as being invalid and we didn't store the reason why" << std::endl;
-            break;
-        case BlockValidationResult::BLOCK_INVALID_HEADER:
-            std::cerr << "invalid proof of work or time too old" << std::endl;
-            break;
-        case BlockValidationResult::BLOCK_MUTATED:
-            std::cerr << "the block's data didn't match the data committed to by the PoW" << std::endl;
-            break;
-        case BlockValidationResult::BLOCK_MISSING_PREV:
-            std::cerr << "We don't have the previous block the checked one is built on" << std::endl;
-            break;
-        case BlockValidationResult::BLOCK_INVALID_PREV:
-            std::cerr << "A block this one builds on is invalid" << std::endl;
-            break;
-        case BlockValidationResult::BLOCK_TIME_FUTURE:
-            std::cerr << "block timestamp was > 2 hours in the future (or our clock is bad)" << std::endl;
-            break;
-        case BlockValidationResult::BLOCK_CHECKPOINT:
-            std::cerr << "the block failed to meet one of our checkpoints" << std::endl;
-            break;
+            assert(current_height);
         }
     }
 
