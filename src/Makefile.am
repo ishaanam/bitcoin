@@ -308,6 +308,7 @@ BITCOIN_CORE_H = \
   util/bytevectorhash.h \
   util/chaintype.h \
   util/check.h \
+  util/coinjoins.h \
   util/epochguard.h \
   util/exception.h \
   util/fastrange.h \
@@ -748,6 +749,7 @@ libbitcoin_util_a_SOURCES = \
   util/bytevectorhash.cpp \
   util/chaintype.cpp \
   util/check.cpp \
+  util/coinjoins.cpp \
   util/exception.cpp \
   util/feefrac.cpp \
   util/fs.cpp \
@@ -1002,6 +1004,7 @@ libbitcoinkernel_la_SOURCES = \
   uint256.cpp \
   util/chaintype.cpp \
   util/check.cpp \
+  util/coinjoins.cpp \
   util/feefrac.cpp \
   util/fs.cpp \
   util/fs_helpers.cpp \
