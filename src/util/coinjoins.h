@@ -3,6 +3,11 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_UTIL_COINJOINS_H
+
+#include <primitives/transaction.h>
+
+bool isWhirlpool(const CTransactionRef& tx);
+
 #define BITCOIN_UTIL_COINJOINS_H
 
 #endif // BITCOIN_UTIL_COINJOINS_H

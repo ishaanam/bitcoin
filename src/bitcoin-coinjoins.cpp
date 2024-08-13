@@ -26,6 +26,7 @@
 #include <random.h>
 #include <script/sigcache.h>
 #include <util/chaintype.h>
+#include <util/coinjoins.h>
 #include <util/fs.h>
 #include <util/signalinterrupt.h>
 #include <util/task_runner.h>
@@ -151,46 +152,37 @@ int main(int argc, char* argv[])
 
     // Main program logic starts here
 
-    CBlockIndex* current_height;
+    CBlockIndex* current_block;
+
+    // First block containing a whirlpool transaction
 
     {
         LOCK(::cs_main);
-        current_height = chainman.m_blockman.LookupBlockIndex(uint256S("0000000000000000000682164224dc4979662b3824ccad634d52f1bd1a232b00"));
+        LOCK(chainman.GetMutex());
+        current_block = chainman.ActiveTip();
     }
 
-    if (current_height) {
-        for (int i = 0; i < 10; i++) {
-            std::cout << "In Block: #" << current_height->nHeight << "\n";
+    while (current_block && current_block->phashBlock->ToString() != "0000000000000000002bce23ec7709036829e5bc0315cc2ab45471c6e4c0ee51") {
+        std::cout << "In Block: #" << current_block->nHeight << "\n";
 
-            int num_whirlpool = 0;
-            CBlock block;
-            chainman.m_blockman.ReadBlockFromDisk(block, *current_height);
+        int num_whirlpool = 0;
+        CBlock block;
+        chainman.m_blockman.ReadBlockFromDisk(block, *current_block);
 
-            // eventually replace with some sort of CoinJoin criteria
+        for (const CTransactionRef& tx : block.vtx) {
 
-            for (const CTransactionRef& tx : block.vtx) {
-                if (tx->vin.size() == 5 && tx->vout.size() == 5) {
-                    int amount = tx->vout.at(0).nValue;
-                    bool same_amount = true;
-
-                    for_each(tx->vout.begin(), tx->vout.end(), [amount, &same_amount](CTxOut tx_out) {
-                        same_amount &= amount == tx_out.nValue;
-                    });
-
-                    if (same_amount) {
-                        num_whirlpool += 1;
-                        std::cout << "\tWhirlpool Transaction: " << tx->GetHash().ToString() << "\n";
-                    }
-                }
+            if (isWhirlpool(tx)) {
+                num_whirlpool += 1;
+                std::cout << "\tWhirlpool Transaction: " << tx->GetHash().ToString() << "\n";
             }
-
-            std::cout << "\t" << num_whirlpool << " Whirlpool transactions\n";
-
-            // move to next block
-            current_height = current_height->pprev;
-
-            assert(current_height);
         }
+
+        std::cout << "\t" << num_whirlpool << " Whirlpool transactions\n";
+
+        // move to next block
+        current_block = current_block->pprev;
+
+        break;
     }
 
 epilogue:
