@@ -11,21 +11,6 @@
 //
 // It is part of the libbitcoinkernel project.
 
-#include <kernel/chainparams.h>
-#include <kernel/chainstatemanager_opts.h>
-#include <kernel/checks.h>
-#include <kernel/context.h>
-#include <kernel/validation_cache_sizes.h>
-#include <kernel/warning.h>
-
-#include <consensus/validation.h>
-#include <core_io.h>
-#include <node/blockstorage.h>
-#include <node/caches.h>
-#include <node/chainstate.h>
-#include <random.h>
-#include <script/sigcache.h>
-#include <util/chaintype.h>
 #include <util/coinjoins.h>
 #include <util/fs.h>
 #include <util/signalinterrupt.h>
@@ -150,39 +135,54 @@ int main(int argc, char* argv[])
         }
     }
 
-    // Main program logic starts here
-
-    CBlockIndex* current_block;
-
-    // First block containing a whirlpool transaction
-
     {
-        LOCK(::cs_main);
-        LOCK(chainman.GetMutex());
-        current_block = chainman.ActiveTip();
-    }
+        // Main program logic starts here
 
-    while (current_block && current_block->phashBlock->ToString() != "0000000000000000002bce23ec7709036829e5bc0315cc2ab45471c6e4c0ee51") {
-        std::cout << "In Block: #" << current_block->nHeight << "\n";
+        // uint256 block_hash = uint256S("0000000000000000002bce23ec7709036829e5bc0315cc2ab45471c6e4c0ee51");
+        int block_height = 572030;
+        CBlockIndex* current_block;
 
-        int num_whirlpool = 0;
-        CBlock block;
-        chainman.m_blockman.ReadBlockFromDisk(block, *current_block);
+        // Keeping track of data:
+        Tx0s tx0s{};
+        WhirlpoolTransactions whirlpool_txs{};
 
-        for (const CTransactionRef& tx : block.vtx) {
+        // First block containing a whirlpool transaction
 
-            if (isWhirlpool(tx)) {
-                num_whirlpool += 1;
-                std::cout << "\tWhirlpool Transaction: " << tx->GetHash().ToString() << "\n";
+        int i = 0;
+
+        {
+            LOCK(chainman.GetMutex());
+            current_block = chainman.ActiveChain()[block_height];
+        }
+        
+        while (current_block) {
+            i += 1;
+            std::cout << "In Block: #" << current_block->nHeight << " block hash: " << current_block->phashBlock->ToString() << "\n";
+
+            int num_whirlpool = 0;
+            CBlock block;
+            chainman.m_blockman.ReadBlockFromDisk(block, *current_block);
+
+            for (const CTransactionRef& tx : block.vtx) {
+
+                if (whirlpool_txs.isWhirlpool(tx)) {
+                    num_whirlpool += 1;
+                    std::cout << "\tWhirlpool Transaction: " << tx->GetHash().ToString() << "\n";
+                }
+            }
+
+            std::cout << "\t" << num_whirlpool << " Whirlpool transactions\n";
+
+            {
+                LOCK(chainman.GetMutex());
+                current_block = chainman.ActiveChain().Next(current_block);
+            }
+
+            if (i > 100) {
+                break;
             }
         }
 
-        std::cout << "\t" << num_whirlpool << " Whirlpool transactions\n";
-
-        // move to next block
-        current_block = current_block->pprev;
-
-        break;
     }
 
 epilogue:

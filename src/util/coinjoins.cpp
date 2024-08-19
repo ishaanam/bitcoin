@@ -4,7 +4,7 @@
 
 #include <util/coinjoins.h>
 
-bool isWhirlpool(const CTransactionRef& tx) {
+bool WhirlpoolTransactions::isWhirlpool(const CTransactionRef& tx) {
     if (tx->vin.size() == 5 && tx->vout.size() == 5) {
         int amount = tx->vout.at(0).nValue;
         bool same_amount = true;
@@ -20,7 +20,14 @@ bool isWhirlpool(const CTransactionRef& tx) {
             same_amount &= amount == tx_out.nValue;
         });
 
-        return same_amount;
+        if (same_amount) {
+            for (const CTxIn& tx_in : tx->vin) {
+                if (cj_transactions.contains(tx_in.prevout.hash)) {
+                    // do things
+                    return true;
+                }
+            }
+        }
     }
 
     return false;
