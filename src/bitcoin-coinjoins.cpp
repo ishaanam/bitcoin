@@ -142,12 +142,9 @@ int main(int argc, char* argv[])
         CBlockIndex* current_block;
 
         // Keeping track of data:
-        Tx0s tx0s{};
         WhirlpoolTransactions whirlpool_txs{};
 
         // First block containing a whirlpool transaction
-
-        int i = 0;
 
         {
             LOCK(chainman.GetMutex());
@@ -155,7 +152,6 @@ int main(int argc, char* argv[])
         }
 
         while (current_block) {
-            i += 1;
 
             CBlock block;
             chainman.m_blockman.ReadBlockFromDisk(block, *current_block);
@@ -168,12 +164,15 @@ int main(int argc, char* argv[])
             {
                 LOCK(chainman.GetMutex());
                 current_block = chainman.ActiveChain().Next(current_block);
+                block_height += 1;
             }
 
-            if (i > 100) {
+            if (block_height > 725348) {
                 break;
             }
         }
+
+        std::cout << "# of tx0s: " << whirlpool_txs.GetNumTx0s() << "\n";
     }
 
 epilogue:

@@ -34,11 +34,17 @@ public:
     void Update(const uint256& txid) {
         if (tx0_set.insert(txid).second) {
             // write the tx0 to the csv file
+            std::cout << "\ttx0: " << txid.ToString() << "\n";
         }
+    }
+
+    int Size() {
+        return tx0_set.size();
     }
 };
 
 class WhirlpoolTransactions {
+    Tx0s tx0s;
     std::set<uint256> cj_transactions;
 
     bool isWhirlpool(const CTransactionRef& tx);
@@ -46,6 +52,7 @@ class WhirlpoolTransactions {
 public:
     WhirlpoolTransactions() {
         cj_transactions = {};
+        tx0s = {};
 
         // Add all Genesis Whirlpool transactions
         cj_transactions.insert(uint256S("c6c27bef217583cca5f89de86e0cd7d8b546844f800da91d91a74039c3b40fba"));
@@ -59,6 +66,9 @@ public:
     
     void Update(const CTransactionRef& tx);
 
+    int GetNumTx0s() {
+        return tx0s.Size();
+    }
 };
 
 #define BITCOIN_UTIL_COINJOINS_H

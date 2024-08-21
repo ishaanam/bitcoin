@@ -37,7 +37,12 @@ bool WhirlpoolTransactions::isWhirlpool(const CTransactionRef& tx) {
 void WhirlpoolTransactions::Update(const CTransactionRef& tx) {
     if (isWhirlpool(tx)) {
         cj_transactions.insert(tx->GetHash());
-        std::cout << "\tWhirlpool Transaction: " << tx->GetHash().ToString() << "\n";
+        // std::cout << "\tWhirlpool Transaction: " << tx->GetHash().ToString() << "\n";
+        for (const CTxIn& tx_in : tx->vin) {
+            if (!cj_transactions.contains(tx_in.prevout.hash)) {
+                tx0s.Update(tx_in.prevout.hash);
+            }
+        }
     }
 }
 
