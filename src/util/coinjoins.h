@@ -41,6 +41,8 @@ public:
 class WhirlpoolTransactions {
     std::set<uint256> cj_transactions;
 
+    bool isWhirlpool(const CTransactionRef& tx);
+
 public:
     WhirlpoolTransactions() {
         cj_transactions = {};
@@ -54,8 +56,8 @@ public:
         cj_transactions.insert(uint256S("a554db794560458c102bab0af99773883df13bc66ad287c29610ad9bac138926"));
         cj_transactions.insert(uint256S("792c0bfde7f6bf023ff239660fb876315826a0a52fd32e78ea732057789b2be0"));
     }
-
-    bool isWhirlpool(const CTransactionRef& tx);
+    
+    void Update(const CTransactionRef& tx);
 
 };
 

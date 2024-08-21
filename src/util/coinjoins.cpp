@@ -21,14 +21,23 @@ bool WhirlpoolTransactions::isWhirlpool(const CTransactionRef& tx) {
         });
 
         if (same_amount) {
+            bool remix_tx_in = false;
             for (const CTxIn& tx_in : tx->vin) {
                 if (cj_transactions.contains(tx_in.prevout.hash)) {
-                    // do things
-                    return true;
+                    remix_tx_in |= true;
                 }
             }
+            return remix_tx_in;
         }
     }
 
     return false;
 }
+
+void WhirlpoolTransactions::Update(const CTransactionRef& tx) {
+    if (isWhirlpool(tx)) {
+        cj_transactions.insert(tx->GetHash());
+        std::cout << "\tWhirlpool Transaction: " << tx->GetHash().ToString() << "\n";
+    }
+}
+

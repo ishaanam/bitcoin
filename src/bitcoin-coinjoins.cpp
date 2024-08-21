@@ -138,8 +138,7 @@ int main(int argc, char* argv[])
     {
         // Main program logic starts here
 
-        // uint256 block_hash = uint256S("0000000000000000002bce23ec7709036829e5bc0315cc2ab45471c6e4c0ee51");
-        int block_height = 572030;
+        int block_height = 572030; // 0000000000000000002bce23ec7709036829e5bc0315cc2ab45471c6e4c0ee51
         CBlockIndex* current_block;
 
         // Keeping track of data:
@@ -154,24 +153,17 @@ int main(int argc, char* argv[])
             LOCK(chainman.GetMutex());
             current_block = chainman.ActiveChain()[block_height];
         }
-        
+
         while (current_block) {
             i += 1;
-            std::cout << "In Block: #" << current_block->nHeight << " block hash: " << current_block->phashBlock->ToString() << "\n";
 
-            int num_whirlpool = 0;
             CBlock block;
             chainman.m_blockman.ReadBlockFromDisk(block, *current_block);
 
             for (const CTransactionRef& tx : block.vtx) {
 
-                if (whirlpool_txs.isWhirlpool(tx)) {
-                    num_whirlpool += 1;
-                    std::cout << "\tWhirlpool Transaction: " << tx->GetHash().ToString() << "\n";
-                }
+                whirlpool_txs.Update(tx);
             }
-
-            std::cout << "\t" << num_whirlpool << " Whirlpool transactions\n";
 
             {
                 LOCK(chainman.GetMutex());
@@ -182,7 +174,6 @@ int main(int argc, char* argv[])
                 break;
             }
         }
-
     }
 
 epilogue:
