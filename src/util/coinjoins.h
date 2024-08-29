@@ -7,18 +7,29 @@
 
 #include <primitives/transaction.h>
 
+#include <fstream>
+#include <util/fs.h>
 
 class Tx0s {
+    std::ofstream tx0_file;
+
     std::set<uint256> tx0_set;
 
 public:
-    Tx0s() {
+    Tx0s(fs::path datadir)
+    {
+        tx0_file.open(datadir + "tx0s.csv");
+
         tx0_set = {};
+    }
+
+    ~Tx0s() {
+        tx0_file.close();
     }
 
     void Update(const uint256& txid) {
         if (tx0_set.insert(txid).second) {
-            // To-Do: write the tx0 to the csv file
+            tx0_file << txid.ToString() << "\n";
         }
     }
 
@@ -31,12 +42,17 @@ class WhirlpoolTransactions {
     Tx0s tx0s;
     std::set<uint256> cj_transactions;
 
+    std::ofstream cj_file;
+
     bool isWhirlpool(const CTransactionRef& tx);
 
 public:
-    WhirlpoolTransactions() {
+    WhirlpoolTransactions(fs::path datadir)
+      : tx0s{datadir}
+    {
+        cj_file.open(datadir + "coinjoins.csv", std::ios_base::app);
+
         cj_transactions = {};
-        tx0s = {};
 
         // Add all Genesis Whirlpool transactions
         cj_transactions.insert(uint256S("c6c27bef217583cca5f89de86e0cd7d8b546844f800da91d91a74039c3b40fba"));
@@ -46,6 +62,10 @@ public:
         cj_transactions.insert(uint256S("a42596825352055841949a8270eda6fb37566a8780b2aec6b49d8035955d060e"));
         cj_transactions.insert(uint256S("a554db794560458c102bab0af99773883df13bc66ad287c29610ad9bac138926"));
         cj_transactions.insert(uint256S("792c0bfde7f6bf023ff239660fb876315826a0a52fd32e78ea732057789b2be0"));
+    }
+
+    ~WhirlpoolTransactions() {
+        cj_file.close();
     }
 
     void Update(const CTransactionRef& tx);

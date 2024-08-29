@@ -158,7 +158,7 @@ int main(int argc, char* argv[])
         CBlockIndex* current_block;
 
         // Keeping track of data:
-        WhirlpoolTransactions whirlpool_txs{};
+        WhirlpoolTransactions whirlpool_txs{abs_datadir};
 
         {
             LOCK(chainman.GetMutex());

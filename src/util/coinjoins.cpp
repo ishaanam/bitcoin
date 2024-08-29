@@ -28,6 +28,9 @@ bool WhirlpoolTransactions::isWhirlpool(const CTransactionRef& tx) {
 
 void WhirlpoolTransactions::Update(const CTransactionRef& tx) {
     if (isWhirlpool(tx)) {
+
+        cj_file << tx->GetHash().ToString() << "," << tx->vout.at(0).nValue <<"\n";
+
         cj_transactions.insert(tx->GetHash());
         for (const CTxIn& tx_in : tx->vin) {
             if (!cj_transactions.contains(tx_in.prevout.hash)) {
