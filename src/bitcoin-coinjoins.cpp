@@ -26,6 +26,7 @@
 #include <random.h>
 #include <script/sigcache.h>
 #include <util/chaintype.h>
+#include <util/coinjoins.h>
 #include <util/fs.h>
 #include <util/signalinterrupt.h>
 #include <util/task_runner.h>
@@ -149,7 +150,40 @@ int main(int argc, char* argv[])
         }
     }
 
-    // Main program logic starts here
+    {
+        // Main program logic starts here
+
+        // First block containing a whirlpool transaction
+        int block_height = 572030; // 0000000000000000002bce23ec7709036829e5bc0315cc2ab45471c6e4c0ee51
+        CBlockIndex* current_block;
+
+        // Keeping track of data:
+        WhirlpoolTransactions whirlpool_txs{};
+
+        {
+            LOCK(chainman.GetMutex());
+            current_block = chainman.ActiveChain()[block_height];
+        }
+
+        while (current_block) {
+
+            CBlock block;
+            chainman.m_blockman.ReadBlockFromDisk(block, *current_block);
+
+            for (const CTransactionRef& tx : block.vtx) {
+
+                whirlpool_txs.Update(tx);
+            }
+
+            {
+                LOCK(chainman.GetMutex());
+                current_block = chainman.ActiveChain().Next(current_block);
+                block_height += 1;
+            }
+        }
+
+        std::cout << "# of tx0s: " << whirlpool_txs.GetNumTx0s() << "\n";
+    }
 
 epilogue:
     // Without this precise shutdown sequence, there will be a lot of nullptr
