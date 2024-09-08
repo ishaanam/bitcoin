@@ -172,7 +172,7 @@ int main(int argc, char* argv[])
 
             for (const CTransactionRef& tx : block.vtx) {
 
-                whirlpool_txs.Update(tx);
+                whirlpool_txs.Update(tx, current_block->nHeight);
             }
 
             {

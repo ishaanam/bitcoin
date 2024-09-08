@@ -68,7 +68,7 @@ public:
         cj_file.close();
     }
 
-    void Update(const CTransactionRef& tx);
+    void Update(const CTransactionRef& tx, int block_height);
 
     int GetNumTx0s() {
         return tx0s.Size();
