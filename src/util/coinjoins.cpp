@@ -34,7 +34,7 @@ void WhirlpoolTransactions::Update(const CTransactionRef& tx, int block_height) 
         cj_transactions.insert(tx->GetHash());
         for (const CTxIn& tx_in : tx->vin) {
             if (!cj_transactions.contains(tx_in.prevout.hash)) {
-                tx0s.Update(tx_in.prevout.hash);
+                tx0s.Update(tx_in.prevout.hash, tx->vout.at(0).nValue);
             }
         }
     }

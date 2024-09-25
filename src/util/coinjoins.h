@@ -27,9 +27,9 @@ public:
         tx0_file.close();
     }
 
-    void Update(const uint256& txid) {
+    void Update(const uint256& txid, const CAmount& denomination) {
         if (tx0_set.insert(txid).second) {
-            tx0_file << txid.ToString() << "\n";
+            tx0_file << txid.ToString() << "," << denomination << "\n";
         }
     }
 
