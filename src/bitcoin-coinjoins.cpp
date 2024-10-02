@@ -175,6 +175,8 @@ int main(int argc, char* argv[])
                 whirlpool_txs.Update(tx, current_block->nHeight);
             }
 
+            std::cout << "Block height: " << block_height << "\n";
+
             {
                 LOCK(chainman.GetMutex());
                 current_block = chainman.ActiveChain().Next(current_block);
