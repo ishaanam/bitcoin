@@ -11,25 +11,39 @@
 #include <util/fs.h>
 
 class Tx0s {
-    std::ofstream tx0_file;
+    fs::path datadir;
 
-    std::set<uint256> tx0_set;
+    // txid, denomination(s)
+    std::map<uint256,std::vector<CAmount>> tx0_set;
 
 public:
     Tx0s(fs::path datadir)
+      : datadir(datadir)
     {
-        tx0_file.open(datadir + "tx0s.csv");
-
         tx0_set = {};
     }
 
     ~Tx0s() {
+        std::ofstream tx0_file;
+        tx0_file.open(datadir + "tx0s.csv");
+        for (auto entry = tx0_set.begin(); entry != tx0_set.end(); ++entry) {
+            tx0_file << entry->first.ToString() << ",";
+
+            for (unsigned int i = 0; i < (entry->second.size() - 1); i++) {
+                tx0_file << entry->second[i] << ",";
+            }
+            tx0_file << entry->second[entry->second.size() - 1] << "\n";
+        }
         tx0_file.close();
     }
 
     void Update(const uint256& txid, const CAmount& denomination) {
-        if (tx0_set.insert(txid).second) {
-            tx0_file << txid.ToString() << "," << denomination << "\n";
+        auto entry = tx0_set.find(txid);
+        if (entry != tx0_set.end()) {
+            tx0_set[txid].push_back(denomination);
+        } else {
+            // create new entry
+            tx0_set[txid] = {denomination};
         }
     }
 
