@@ -26,7 +26,9 @@ bool WhirlpoolTransactions::isWhirlpool(const CTransactionRef& tx) {
     return false;
 }
 
-void WhirlpoolTransactions::Update(const CTransactionRef& tx, int block_height) {
+void WhirlpoolTransactions::Update(const CTransactionRef& tx, const CBlockIndex* block) {
+
+    int block_height = block->nHeight;
     if (isWhirlpool(tx)) {
 
         cj_file << tx->GetHash().ToString() << "," << tx->vout.at(0).nValue << "," << block_height <<"\n";

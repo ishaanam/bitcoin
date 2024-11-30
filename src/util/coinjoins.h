@@ -5,6 +5,7 @@
 #ifndef BITCOIN_UTIL_COINJOINS_H
 #define BITCOIN_UTIL_COINJOINS_H
 
+#include <chain.h>
 #include <primitives/transaction.h>
 
 #include <fstream>
@@ -82,7 +83,7 @@ public:
         cj_file.close();
     }
 
-    void Update(const CTransactionRef& tx, int block_height);
+    void Update(const CTransactionRef& tx, const CBlockIndex* block);
 
     int GetNumTx0s() {
         return tx0s.Size();

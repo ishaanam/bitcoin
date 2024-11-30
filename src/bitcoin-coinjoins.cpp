@@ -172,7 +172,7 @@ int main(int argc, char* argv[])
 
             for (const CTransactionRef& tx : block.vtx) {
 
-                whirlpool_txs.Update(tx, current_block->nHeight);
+                whirlpool_txs.Update(tx, current_block);
             }
 
             std::cout << "Block height: " << block_height << "\n";
@@ -181,6 +181,10 @@ int main(int argc, char* argv[])
                 LOCK(chainman.GetMutex());
                 current_block = chainman.ActiveChain().Next(current_block);
                 block_height += 1;
+            }
+
+            if (block_height > 725348) {
+                break;
             }
         }
 
