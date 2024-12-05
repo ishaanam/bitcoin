@@ -15,7 +15,7 @@ class Tx0s {
     fs::path datadir;
 
     // txid, denomination(s)
-    std::map<uint256,std::vector<CAmount>> tx0_set;
+    std::map<uint256,std::vector<std::pair<uint32_t, CAmount>>> tx0_set;
 
 public:
     Tx0s(fs::path datadir)
@@ -31,20 +31,20 @@ public:
             tx0_file << entry->first.ToString() << ",";
 
             for (unsigned int i = 0; i < (entry->second.size() - 1); i++) {
-                tx0_file << entry->second[i] << ",";
+                tx0_file << entry->second[i].second << ",";
             }
-            tx0_file << entry->second[entry->second.size() - 1] << "\n";
+            tx0_file << entry->second[entry->second.size() - 1].second << "\n";
         }
         tx0_file.close();
     }
 
-    void Update(const uint256& txid, const CAmount& denomination) {
+    void Update(const uint256& txid, const CAmount& denomination, uint32_t time) {
         auto entry = tx0_set.find(txid);
         if (entry != tx0_set.end()) {
-            tx0_set[txid].push_back(denomination);
+            tx0_set[txid].push_back({time, denomination});
         } else {
             // create new entry
-            tx0_set[txid] = {denomination};
+            tx0_set[txid] = {{time, denomination}};
         }
     }
 
