@@ -170,9 +170,13 @@ int main(int argc, char* argv[])
             CBlock block;
             chainman.m_blockman.ReadBlockFromDisk(block, *current_block);
 
+            CFeeRate fee_rate = GetMedianFeeRateFromBlock(block);
+
+            // the get feerate function
+
             for (const CTransactionRef& tx : block.vtx) {
 
-                whirlpool_txs.Update(tx, current_block->nHeight);
+                whirlpool_txs.Update(tx, current_block->nHeight, fee_rate);
             }
 
             std::cout << "Block height: " << block_height << "\n";

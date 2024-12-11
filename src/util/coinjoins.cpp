@@ -26,10 +26,16 @@ bool WhirlpoolTransactions::isWhirlpool(const CTransactionRef& tx) {
     return false;
 }
 
-void WhirlpoolTransactions::Update(const CTransactionRef& tx, int block_height) {
+CFeeRate GetMedianFeeRateFromBlock(const CBlock& block) {
+    // calculate median fee rate
+    return CFeeRate(0);
+}
+
+void WhirlpoolTransactions::Update(const CTransactionRef& tx, int block_height, CFeeRate median_fee_rate) {
     if (isWhirlpool(tx)) {
 
-        cj_file << tx->GetHash().ToString() << "," << tx->vout.at(0).nValue << "," << block_height <<"\n";
+        // cj_file << tx->GetHash().ToString() << "," << tx->vout.at(0).nValue << "," << block_height <<"\n"; // this writes denomination instead of median feerate
+        cj_file << tx->GetHash().ToString() << "," << median_fee_rate.GetFeePerK() << "," << block_height <<"\n";
 
         cj_transactions.insert(tx->GetHash());
         for (const CTxIn& tx_in : tx->vin) {

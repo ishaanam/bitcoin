@@ -5,7 +5,9 @@
 #ifndef BITCOIN_UTIL_COINJOINS_H
 #define BITCOIN_UTIL_COINJOINS_H
 
+#include <policy/feerate.h>
 #include <primitives/transaction.h>
+#include <primitives/block.h>
 
 #include <fstream>
 #include <util/fs.h>
@@ -23,6 +25,7 @@ public:
         tx0_set = {};
     }
 
+    /*
     ~Tx0s() {
         std::ofstream tx0_file;
         tx0_file.open(datadir + "tx0s.csv");
@@ -36,6 +39,7 @@ public:
         }
         tx0_file.close();
     }
+    */
 
     void Update(const uint256& txid, const CAmount& denomination) {
         auto entry = tx0_set.find(txid);
@@ -51,6 +55,8 @@ public:
         return tx0_set.size();
     }
 };
+
+CFeeRate GetMedianFeeRateFromBlock(const CBlock& block);
 
 class WhirlpoolTransactions {
     Tx0s tx0s;
@@ -82,7 +88,7 @@ public:
         cj_file.close();
     }
 
-    void Update(const CTransactionRef& tx, int block_height);
+    void Update(const CTransactionRef& tx, int block_height, CFeeRate median_fee_rate);
 
     int GetNumTx0s() {
         return tx0s.Size();
