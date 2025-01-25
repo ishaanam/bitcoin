@@ -41,6 +41,9 @@
 #include <memory>
 #include <string>
 
+// this block contains the first whirlpool coinjoin transaction
+static const int FIRST_COINJOIN_HEIGHT = 572341; // 00000000000000000028802df15e53c435ae81fad26d4fb3414a5ab00ab90d5c
+
 int main(int argc, char* argv[])
 {
     // SETUP: Argument parsing and handling
@@ -153,8 +156,7 @@ int main(int argc, char* argv[])
     {
         // Main program logic starts here
 
-        // First block containing a whirlpool transaction
-        int block_height = 572030; // 0000000000000000002bce23ec7709036829e5bc0315cc2ab45471c6e4c0ee51
+        int block_height = FIRST_COINJOIN_HEIGHT;
         CBlockIndex* current_block;
 
         // Keeping track of data:
@@ -180,6 +182,11 @@ int main(int argc, char* argv[])
             }
 
             std::cout << "Block height: " << block_height << "\n";
+
+            // only look at 10 blocks after the first coinjoin block height for now
+            if (block_height >= FIRST_COINJOIN_HEIGHT+10) {
+                break;
+            }
 
             {
                 LOCK(chainman.GetMutex());
