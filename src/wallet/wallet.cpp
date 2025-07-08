@@ -1404,9 +1404,23 @@ void CWallet::transactionAddedToMempool(const CTransactionRef& tx) {
         for (const CTxIn& tx_in : tx->vin) {
             auto parent_it = mapWallet.find(tx_in.prevout.hash);
             if (parent_it != mapWallet.end()) {
-                CWalletTx& parent_wtx = parent_it->second;
-                if (parent_wtx.isUnconfirmed()) {
-                    parent_wtx.truc_child_in_mempool = tx->GetHash();
+                CWalletTx& parent_tx = parent_it->second;
+                if (parent_tx.isUnconfirmed()) {
+                    parent_tx.truc_child_in_mempool = tx->GetHash();
+                    // Find all other txs in our wallet that spend utxos from this parent
+                    // so that we can mark them as mempool-conflicted by this new tx.
+                    // Even though these siblings do not spend the same utxos, they can't
+                    // be present in the mempool at the same time because of TRUC policy rules
+                    for (long unsigned int i = 0; i < parent_tx.tx->vout.size(); i++) {
+                        for (auto range = mapTxSpends.equal_range(COutPoint(parent_tx.tx->GetHash(), i)); range.first != range.second; range.first++) {
+                            const Txid& sibling_txid = range.first->second;
+                            // Skip the recently added tx
+                            if (sibling_txid == txid) continue;
+                            RecursiveUpdateTxState(/*batch=*/nullptr, sibling_txid, [&txid](CWalletTx& parent_tx) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
+                                return parent_tx.mempool_conflicts.insert(txid).second ? TxUpdate::CHANGED : TxUpdate::UNCHANGED;
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -1475,6 +1489,15 @@ void CWallet::transactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRe
                 CWalletTx& wtx = wallet_it->second;
                 if (wtx.truc_child_in_mempool == tx->GetHash()) {
                     wtx.truc_child_in_mempool = std::nullopt;
+                    // Find all wallet transactions that spend utxos from this tx
+                    for (long unsigned int i = 0; i < wtx.tx->vout.size(); i++) {
+                        for (auto range = mapTxSpends.equal_range(COutPoint(wtx.tx->GetHash(), i)); range.first != range.second; range.first++) {
+                            const Txid& spent_id = range.first->second;
+                            RecursiveUpdateTxState(/*batch=*/nullptr, spent_id, [&txid](CWalletTx& wtx) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
+                                return wtx.mempool_conflicts.erase(txid) ? TxUpdate::CHANGED : TxUpdate::UNCHANGED;
+                            });
+                        }
+                    }
                 }
             }
         }
