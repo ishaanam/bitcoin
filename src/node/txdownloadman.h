@@ -27,6 +27,7 @@ namespace node {
 class TxDownloadManagerImpl;
 
 static constexpr bool DEFAULT_ENABLE_PACKAGE_RELAY{false};
+static constexpr size_t MAX_SENDER_INIT_PKG_SIZE{2};
 
 /** Maximum number of in-flight transaction requests from a peer. It is not a hard limit, but the threshold at which
  *  point the OVERLOADED_PEER_TX_DELAY kicks in. */

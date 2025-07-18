@@ -4810,6 +4810,46 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         return;
     }
 
+    if (msg_type == NetMsgType::PKGTXNS) {
+        if (RejectIncomingTxs(pfrom)) {
+            LogDebug(BCLog::NET, "pkgtxns sent in violation of protocol, %s", pfrom.DisconnectMsg(fLogIPs));
+            pfrom.fDisconnect = true;
+            return;
+        }
+
+        if (!m_txdownloadman.NodeSupportsVersion(pfrom.GetId(), PKG_RELAY_PKGTXNS)) {
+            LogDebug(BCLog::NET, "\npkgtxns not negotiated, disconnecting peer=%d\n", pfrom.GetId());
+            pfrom.fDisconnect = true;
+            return;
+        }
+
+        unsigned int num_txns = ReadCompactSize(vRecv);
+        if (num_txns == 0) return;
+        if (num_txns > node::MAX_SENDER_INIT_PKG_SIZE) {
+            LogDebug(BCLog::NET, "\npkgtxns exceeds allowed size, disconnecting peer=%d\n", pfrom.GetId());
+            pfrom.fDisconnect = true;
+            return;
+        }
+        std::vector<CTransactionRef> package;
+        package.resize(num_txns);
+        for (unsigned int n = 0; n < num_txns; n++) {
+            vRecv >> TX_WITH_WITNESS(package[n]);
+        }
+
+        const auto package_to_validate(m_txdownloadman.ReceivedPackage(pfrom.GetId(), package));
+
+        if (package_to_validate) {
+            const auto package_result{ProcessNewPackage(m_chainman.ActiveChainstate(), m_mempool, package_to_validate.value().m_txns, /*test_accept=*/false, /*client_maxfeerate=*/std::nullopt)};
+
+            LogDebug(BCLog::TXPACKAGES, "package evaluation for %s: %s\n", package_to_validate->ToString(),
+                     package_result.m_state.IsValid() ? "package accepted" : "package rejected");
+
+            ProcessPackageResult(*package_to_validate, package_result);
+        }
+
+        return;
+    }
+
     if (msg_type == NetMsgType::PING) {
         if (pfrom.GetCommonVersion() > BIP0031_VERSION) {
             uint64_t nonce = 0;
