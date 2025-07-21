@@ -964,6 +964,13 @@ private:
         EXCLUSIVE_LOCKS_REQUIRED(!m_most_recent_block_mutex, peer.m_getdata_requests_mutex, NetEventsInterface::g_msgproc_mutex)
         LOCKS_EXCLUDED(::cs_main);
 
+    /**
+     * Return a package containing this tx and its parent if:
+     *  - the tx has exactly one unconfirmed ancestor in the mempool
+     *  - the parent is not in the peer's known inventory
+    */
+    std::optional<PackageToSend> GetSenderInitPackage(const Peer::TxRelay* tx_relay, const CTransactionRef tx);
+
     /** Process a new block. Perform any post-processing housekeeping */
     void ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked);
 
@@ -2435,6 +2442,8 @@ void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic
 
     auto tx_relay = peer.GetTxRelay();
 
+    bool supports_package_relay = tx_relay ? tx_relay->SupportsVersion(PKG_RELAY_PKGTXNS) : false;
+
     std::deque<CInv>::iterator it = peer.m_getdata_requests.begin();
     std::vector<CInv> vNotFound;
 
@@ -2458,7 +2467,16 @@ void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic
         if (auto tx{FindTxForGetData(*tx_relay, ToGenTxid(inv))}) {
             // WTX and WITNESS_TX imply we serialize with witness
             const auto maybe_with_witness = (inv.IsMsgTx() ? TX_NO_WITNESS : TX_WITH_WITNESS);
-            MakeAndPushMessage(pfrom, NetMsgType::TX, maybe_with_witness(*tx));
+            // construct a package here if package relay supported
+            if (supports_package_relay) {
+                if (auto package{GetSenderInitPackage(tx_relay, tx)}) {
+                    MakeAndPushMessage(pfrom, NetMsgType::PKGTXNS, package.value());
+                } else {
+                    MakeAndPushMessage(pfrom, NetMsgType::TX, maybe_with_witness(*tx));
+                }
+            } else {
+                MakeAndPushMessage(pfrom, NetMsgType::TX, maybe_with_witness(*tx));
+            }
             m_mempool.RemoveUnbroadcastTx(tx->GetHash());
         } else {
             vNotFound.push_back(inv);
@@ -2498,6 +2516,39 @@ void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic
         // assume we have them and request the parents from us.
         MakeAndPushMessage(pfrom, NetMsgType::NOTFOUND, vNotFound);
     }
+}
+
+std::optional<PackageToSend> PeerManagerImpl::GetSenderInitPackage(const Peer::TxRelay* tx_relay, const CTransactionRef tx) {
+    PackageToSend package_to_send;
+    std::optional<CTransactionRef> possible_ancestor;
+    if (const auto& entry{m_mempool.GetEntry(tx->GetHash())}) {
+        // look for any ancestors this tx has in the mempool
+        auto ancestors{m_mempool.AssumeCalculateMemPoolAncestors(__func__, *entry, CTxMemPool::Limits::NoLimits(), /*fSearchForParents=*/false)};
+        for (CTxMemPool::txiter it : ancestors) {
+            const CTransactionRef ancestor_tx = MakeTransactionRef(it->GetTx());
+            // skip the child tx as that must be added last
+            if (ancestor_tx->GetHash() == tx->GetHash()) continue;
+            // only add if the ancestor is not in known inventory
+            if (!tx_relay->m_tx_inventory_known_filter.contains(ancestor_tx->GetWitnessHash().ToUint256())) {
+                // more than one ancestor is unkown, don't
+                // send a package
+                if (possible_ancestor) {
+                    return std::nullopt;
+                } else {
+                    possible_ancestor = ancestor_tx;
+                }
+            }
+        }
+        if (possible_ancestor) {
+            // ancestors must go before children
+            package_to_send.txns.push_back(*possible_ancestor);
+            package_to_send.txns.push_back(tx);
+            if (IsChildWithParents(package_to_send.txns)) {
+                return package_to_send;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 uint32_t PeerManagerImpl::GetFetchFlags(const Peer& peer) const
