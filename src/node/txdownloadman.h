@@ -72,6 +72,13 @@ struct PackageToValidate {
         m_senders{parent_sender, child_sender}
     {}
 
+    explicit PackageToValidate(const CTransactionRef& parent,
+                               const CTransactionRef& child,
+                               NodeId sender) :
+        m_txns{parent, child},
+        m_senders{sender, sender}
+    {}
+
     // Move ctor
     PackageToValidate(PackageToValidate&& other) : m_txns{std::move(other.m_txns)}, m_senders{std::move(other.m_senders)} {}
     // Copy ctor
