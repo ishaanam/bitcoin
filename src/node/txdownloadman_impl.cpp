@@ -67,6 +67,9 @@ std::pair<bool, std::optional<PackageToValidate>> TxDownloadManager::ReceivedTx(
 {
     return m_impl->ReceivedTx(nodeid, ptx);
 }
+std::optional<PackageToValidate> TxDownloadManager::ReceivedPackage(NodeId nodeid, const Package& package) {
+    return m_impl->ReceivedPackage(nodeid, package);
+}
 bool TxDownloadManager::HaveMoreWork(NodeId nodeid) const
 {
     return m_impl->HaveMoreWork(nodeid);
@@ -579,6 +582,50 @@ std::pair<bool, std::optional<PackageToValidate>> TxDownloadManagerImpl::Receive
 
 
     return {true, std::nullopt};
+}
+
+std::optional<PackageToValidate> TxDownloadManagerImpl::ReceivedPackage(NodeId nodeid, const Package& package)
+{
+    // The child should be the last tx in the package
+    const CTransactionRef& child_tx = package.back();
+    const CTransactionRef& parent_tx = package.front();
+
+    const Txid& child_txid = child_tx->GetHash();
+    const Wtxid& child_wtxid = child_tx->GetWitnessHash();
+
+    const Txid& parent_txid = parent_tx->GetHash();
+    const Wtxid& parent_wtxid = parent_tx->GetWitnessHash();
+
+    // Mark both the parent and the child as received
+    // because we requested the child and may have 
+    // requested the parent
+    m_txrequest.ReceivedResponse(nodeid, child_txid);
+    m_txrequest.ReceivedResponse(nodeid, parent_txid);
+    if (child_tx->HasWitness()) m_txrequest.ReceivedResponse(nodeid, child_wtxid);
+    if (parent_tx->HasWitness()) m_txrequest.ReceivedResponse(nodeid, parent_wtxid);
+
+    // First check if we should drop this tx.
+    // We do the AlreadyHaveTx() check using wtxid, rather than txid - in the
+    // absence of witness malleation, this is strictly better, because the
+    // recent rejects filter may contain the wtxid but rarely contains
+    // the txid of a segwit transaction that has been rejected.
+    // In the presence of witness malleation, it's possible that by only
+    // doing the check with wtxid, we could overlook a transaction which
+    // was confirmed with a different witness, or exists in our mempool
+    // with a different witness, but this has limited downside:
+    // mempool validation does its own lookup of whether we have the txid
+    // already; and an adversary can already relay us old transactions
+    // (older than our recency filter) if trying to DoS us, without any need
+    // for witness malleation.
+    if (AlreadyHaveTx(child_wtxid, /*include_reconsiderable=*/false)) {
+        return std::nullopt;
+    } else if (RecentRejectsReconsiderableFilter().contains(GetPackageHash(package))) {
+        return std::nullopt;
+    } else if (RecentRejectsFilter().contains(parent_wtxid.ToUint256())) {
+        return std::nullopt;
+    }
+
+    return PackageToValidate(parent_tx, child_tx, nodeid);
 }
 
 bool TxDownloadManagerImpl::HaveMoreWork(NodeId nodeid)

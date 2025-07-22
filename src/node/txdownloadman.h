@@ -172,6 +172,8 @@ public:
      * PackageToValidate. */
     std::pair<bool, std::optional<PackageToValidate>> ReceivedTx(NodeId nodeid, const CTransactionRef& ptx);
 
+    std::optional<PackageToValidate> ReceivedPackage(NodeId nodeid, const Package& package);
+
     /** Whether there are any orphans to reconsider for this peer. */
     bool HaveMoreWork(NodeId nodeid) const;
 
