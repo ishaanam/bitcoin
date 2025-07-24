@@ -1925,6 +1925,24 @@ class msg_sendpackages:
     def __repr__(self):
         return "msg_sendpackages(versions={})".format(self.versions)
 
+class msg_pkgtxns:
+    __slots__ = ("txns")
+    msgtype = b"pkgtxns"
+
+    def __init__(self, txns=None):
+        self.txns = txns if txns is not None else []
+
+    def deserialize(self, f):
+        self.txns = deser_vector(f, CTransaction)
+
+    def serialize(self):
+        r = b""
+        r += ser_vector(self.txns, "serialize_with_witness")
+        return r
+
+    def __repr__(self):
+        return "msg_pkgtxns(txns=%s)" % (self.txns)
+
 class TestFrameworkScript(unittest.TestCase):
     def test_addrv2_encode_decode(self):
         def check_addrv2(ip, net):
