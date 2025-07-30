@@ -604,6 +604,16 @@ std::optional<PackageToValidate> TxDownloadManagerImpl::ReceivedPackage(NodeId n
     if (child_tx->HasWitness()) m_txrequest.ReceivedResponse(nodeid, child_wtxid);
     if (parent_tx->HasWitness()) m_txrequest.ReceivedResponse(nodeid, parent_wtxid);
 
+
+    // check if sending a package was even necessary - only log this so
+    // we don't change behavior yet
+    if (AlreadyHaveTx(parent_wtxid, /*include_reconsiderable=*/false)) {
+        LogDebug(BCLog::TXPACKAGES, "ignoring package, we already have parent: parent %s (wtxid=%s), child %s (wtxid=%s), package hash (%s)\n",
+            parent_tx->GetHash().ToString(), parent_tx->GetWitnessHash().ToString(),
+            child_tx->GetHash().ToString(), child_tx->GetWitnessHash().ToString(),
+            GetPackageHash(package).ToString());
+    }
+
     // First check if we should drop this tx.
     // We do the AlreadyHaveTx() check using wtxid, rather than txid - in the
     // absence of witness malleation, this is strictly better, because the
@@ -618,10 +628,22 @@ std::optional<PackageToValidate> TxDownloadManagerImpl::ReceivedPackage(NodeId n
     // (older than our recency filter) if trying to DoS us, without any need
     // for witness malleation.
     if (AlreadyHaveTx(child_wtxid, /*include_reconsiderable=*/false)) {
+        LogDebug(BCLog::TXPACKAGES, "ignoring package, we already have child: parent %s (wtxid=%s), child %s (wtxid=%s), package hash (%s)\n",
+            parent_tx->GetHash().ToString(), parent_tx->GetWitnessHash().ToString(),
+            child_tx->GetHash().ToString(), child_tx->GetWitnessHash().ToString(),
+            GetPackageHash(package).ToString());
         return std::nullopt;
     } else if (RecentRejectsReconsiderableFilter().contains(GetPackageHash(package))) {
+        LogDebug(BCLog::TXPACKAGES, "ignoring package we previously rejected: parent %s (wtxid=%s), child %s (wtxid=%s), package hash (%s)\n",
+            parent_tx->GetHash().ToString(), parent_tx->GetWitnessHash().ToString(),
+            child_tx->GetHash().ToString(), child_tx->GetWitnessHash().ToString(),
+            GetPackageHash(package).ToString());
         return std::nullopt;
     } else if (RecentRejectsFilter().contains(parent_wtxid.ToUint256())) {
+        LogDebug(BCLog::TXPACKAGES, "dropping package with parent that has already been rejected and is not eligible for reconsideration: parent %s (wtxid=%s), child %s (wtxid=%s), package hash (%s)\n",
+            parent_tx->GetHash().ToString(), parent_tx->GetWitnessHash().ToString(),
+            child_tx->GetHash().ToString(), child_tx->GetWitnessHash().ToString(),
+            GetPackageHash(package).ToString());
         return std::nullopt;
     }
 
