@@ -17,8 +17,17 @@ class CRollingBloomFilter;
 class CTxMemPool;
 class GenTxid;
 class TxRequestTracker;
+
+enum PackageRelayVersions : uint64_t {
+    PKG_RELAY_NONE = 0,
+    PKG_RELAY_PKGTXNS = (1 << 0),
+};
+
 namespace node {
 class TxDownloadManagerImpl;
+
+static constexpr bool DEFAULT_ENABLE_PACKAGE_RELAY{false};
+static constexpr size_t MAX_SENDER_INIT_PKG_SIZE{2};
 
 /** Maximum number of in-flight transaction requests from a peer. It is not a hard limit, but the threshold at which
  *  point the OVERLOADED_PEER_TX_DELAY kicks in. */
@@ -62,6 +71,13 @@ struct PackageToValidate {
                                NodeId child_sender) :
         m_txns{parent, child},
         m_senders{parent_sender, child_sender}
+    {}
+
+    explicit PackageToValidate(const CTransactionRef& parent,
+                               const CTransactionRef& child,
+                               NodeId sender) :
+        m_txns{parent, child},
+        m_senders{sender, sender}
     {}
 
     // Move ctor
@@ -157,6 +173,8 @@ public:
      * PackageToValidate. */
     std::pair<bool, std::optional<PackageToValidate>> ReceivedTx(NodeId nodeid, const CTransactionRef& ptx);
 
+    std::optional<PackageToValidate> ReceivedPackage(NodeId nodeid, const Package& package);
+
     /** Whether there are any orphans to reconsider for this peer. */
     bool HaveMoreWork(NodeId nodeid) const;
 
@@ -171,6 +189,16 @@ public:
 
     /** Wrapper for TxOrphanage::GetOrphanTransactions */
     std::vector<TxOrphanage::OrphanTxBase> GetOrphanTransactions() const;
+
+    /**Which package relay versions we support*/
+    PackageRelayVersions GetSupportedVersions() const;
+    /**Whether the node supports the given versions*/
+    bool NodeSupportsVersion(const NodeId& nodeid, const PackageRelayVersions& versions);
+
+    // The following are used for package relay negotiation
+    void ReceivedVersion(NodeId nodeid);
+    void ReceivedSendpackages(NodeId nodeid, PackageRelayVersions version);
+    std::optional<PackageRelayVersions> UpdateRegistrationState(NodeId nodeid, bool txrelay, bool wtxidrelay);
 };
 } // namespace node
 #endif // BITCOIN_NODE_TXDOWNLOADMAN_H

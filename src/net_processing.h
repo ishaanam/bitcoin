@@ -54,6 +54,7 @@ struct CNodeStateStats {
     std::chrono::microseconds m_ping_wait;
     std::vector<int> vHeightInFlight;
     bool m_relay_txs;
+    bool m_package_relay;
     CAmount m_fee_filter_received;
     uint64_t m_addr_processed = 0;
     uint64_t m_addr_rate_limited = 0;
@@ -81,6 +82,8 @@ public:
         uint32_t max_extra_txs{DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN};
         //! Whether all P2P messages are captured to disk
         bool capture_messages{false};
+        //! Whether this node does enable package relay
+        bool m_enable_package_relay{false};
         //! Whether or not the internal RNG behaves deterministically (this is
         //! a test-only option).
         bool deterministic_rng{false};

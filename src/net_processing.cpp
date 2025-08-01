@@ -278,6 +278,8 @@ struct Peer {
 
     /** Whether this peer relays txs via wtxid */
     std::atomic<bool> m_wtxid_relay{false};
+    /**Whether this peer relays packages */
+    std::atomic<bool> m_package_relay{false};
     /** The feerate in the most recent BIP133 `feefilter` message sent to the peer.
      *  It is *not* a p2p protocol violation for the peer to send us
      *  transactions with a lower fee rate than this. See BIP133. */
@@ -316,6 +318,14 @@ struct Peer {
 
         /** Minimum fee rate with which to filter transaction announcements to this node. See BIP133. */
         std::atomic<CAmount> m_fee_filter_received{0};
+
+        /** What package versions we agreed to relay. */
+        std::atomic<PackageRelayVersions> m_package_versions_supported;
+
+        /** Whether or not the peer supports this version of package relay. */
+        bool SupportsVersion(PackageRelayVersions version) {
+            return m_package_versions_supported & version;
+        }
     };
 
     /* Initializes a TxRelay struct for this peer. Can be called at most once for a peer. */
@@ -954,6 +964,13 @@ private:
         EXCLUSIVE_LOCKS_REQUIRED(!m_most_recent_block_mutex, peer.m_getdata_requests_mutex, NetEventsInterface::g_msgproc_mutex)
         LOCKS_EXCLUDED(::cs_main);
 
+    /**
+     * Return a package containing this tx and its parent if:
+     *  - the tx has exactly one unconfirmed ancestor in the mempool
+     *  - the parent is not in the peer's known inventory
+    */
+    std::optional<PackageToSend> GetSenderInitPackage(const Peer::TxRelay* tx_relay, const CTransactionRef tx);
+
     /** Process a new block. Perform any post-processing housekeeping */
     void ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked);
 
@@ -1073,6 +1090,9 @@ private:
     void PushAddress(Peer& peer, const CAddress& addr) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
 
     void LogBlockHeader(const CBlockIndex& index, const CNode& peer, bool via_compact_block);
+
+    // Finalize the registration state
+    bool ReceivedVerack(NodeId nodeid, bool txrelay, bool wtxidrelay);
 };
 
 const CNodeState* PeerManagerImpl::State(NodeId pnode) const
@@ -1739,6 +1759,7 @@ bool PeerManagerImpl::GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) c
         stats.m_fee_filter_received = 0;
     }
 
+    stats.m_package_relay = peer->m_package_relay;
     stats.m_ping_wait = ping_wait;
     stats.m_addr_processed = peer->m_addr_processed.load();
     stats.m_addr_rate_limited = peer->m_addr_rate_limited.load();
@@ -2421,6 +2442,8 @@ void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic
 
     auto tx_relay = peer.GetTxRelay();
 
+    bool supports_package_relay = tx_relay ? tx_relay->SupportsVersion(PKG_RELAY_PKGTXNS) : false;
+
     std::deque<CInv>::iterator it = peer.m_getdata_requests.begin();
     std::vector<CInv> vNotFound;
 
@@ -2444,7 +2467,21 @@ void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic
         if (auto tx{FindTxForGetData(*tx_relay, ToGenTxid(inv))}) {
             // WTX and WITNESS_TX imply we serialize with witness
             const auto maybe_with_witness = (inv.IsMsgTx() ? TX_NO_WITNESS : TX_WITH_WITNESS);
-            MakeAndPushMessage(pfrom, NetMsgType::TX, maybe_with_witness(*tx));
+            // construct a package here if package relay supported
+            if (supports_package_relay) {
+                if (auto package{GetSenderInitPackage(tx_relay, tx)}) {
+                    auto txns = package.value().txns;
+                    LogDebug(BCLog::TXPACKAGES, "Proactively sending a pkgtxns: parent %s (wtxid=%s), child %s (wtxid=%s), package hash (%s)\n",
+                        txns.front()->GetHash().ToString(), txns.front()->GetWitnessHash().ToString(),
+                        txns.back()->GetHash().ToString(), txns.back()->GetWitnessHash().ToString(),
+                        GetPackageHash(txns).ToString());
+                    MakeAndPushMessage(pfrom, NetMsgType::PKGTXNS, package.value());
+                } else {
+                    MakeAndPushMessage(pfrom, NetMsgType::TX, maybe_with_witness(*tx));
+                }
+            } else {
+                MakeAndPushMessage(pfrom, NetMsgType::TX, maybe_with_witness(*tx));
+            }
             m_mempool.RemoveUnbroadcastTx(tx->GetHash());
         } else {
             vNotFound.push_back(inv);
@@ -2484,6 +2521,39 @@ void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic
         // assume we have them and request the parents from us.
         MakeAndPushMessage(pfrom, NetMsgType::NOTFOUND, vNotFound);
     }
+}
+
+std::optional<PackageToSend> PeerManagerImpl::GetSenderInitPackage(const Peer::TxRelay* tx_relay, const CTransactionRef tx) {
+    PackageToSend package_to_send;
+    std::optional<CTransactionRef> possible_ancestor;
+    if (const auto& entry{m_mempool.GetEntry(tx->GetHash())}) {
+        // look for any ancestors this tx has in the mempool
+        auto ancestors{m_mempool.AssumeCalculateMemPoolAncestors(__func__, *entry, CTxMemPool::Limits::NoLimits(), /*fSearchForParents=*/false)};
+        for (CTxMemPool::txiter it : ancestors) {
+            const CTransactionRef ancestor_tx = MakeTransactionRef(it->GetTx());
+            // skip the child tx as that must be added last
+            if (ancestor_tx->GetHash() == tx->GetHash()) continue;
+            // only add if the ancestor is not in known inventory
+            if (!tx_relay->m_tx_inventory_known_filter.contains(ancestor_tx->GetWitnessHash().ToUint256())) {
+                // more than one ancestor is unkown, don't
+                // send a package
+                if (possible_ancestor) {
+                    return std::nullopt;
+                } else {
+                    possible_ancestor = ancestor_tx;
+                }
+            }
+        }
+        if (possible_ancestor) {
+            // ancestors must go before children
+            package_to_send.txns.push_back(*possible_ancestor);
+            package_to_send.txns.push_back(tx);
+            if (IsChildWithParents(package_to_send.txns)) {
+                return package_to_send;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 uint32_t PeerManagerImpl::GetFetchFlags(const Peer& peer) const
@@ -3434,6 +3504,17 @@ void PeerManagerImpl::LogBlockHeader(const CBlockIndex& index, const CNode& peer
     }
 }
 
+bool PeerManagerImpl::ReceivedVerack(NodeId nodeid, bool txrelay, bool wtxidrelay) {
+    if (auto version = m_txdownloadman.UpdateRegistrationState(nodeid, txrelay, wtxidrelay)) {
+        PeerRef peer = GetPeerRef(nodeid);
+        if (auto peer_tx_relay = peer->GetTxRelay()) {
+            peer_tx_relay->m_package_versions_supported = *version;
+        }
+        return true;
+    }
+    return false;
+}
+
 void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, DataStream& vRecv,
                                      const std::chrono::microseconds time_received,
                                      const std::atomic<bool>& interruptMsgProc)
@@ -3534,6 +3615,16 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
 
         if (greatest_common_version >= WTXID_RELAY_VERSION) {
             MakeAndPushMessage(pfrom, NetMsgType::WTXIDRELAY);
+            if (m_opts.m_enable_package_relay) {
+                m_txdownloadman.ReceivedVersion(peer->m_id);
+                if (!m_opts.ignore_incoming_txs) {
+                // Always send a sendpackages for each version we support if:
+                    // - Protocol version is at least WTXID_RELAY_VERSION
+                    // - We have package relay enabled
+                    // - We are not in blocksonly mode.
+                    MakeAndPushMessage(pfrom, NetMsgType::SENDPACKAGES, uint64_t{m_txdownloadman.GetSupportedVersions()});
+                }
+            }
         }
 
         // Signal ADDRv2 support (BIP155).
@@ -3730,6 +3821,10 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             });
         }
 
+        if (m_opts.m_enable_package_relay && ReceivedVerack(peer->m_id, pfrom.m_relays_txs, peer->m_wtxid_relay)) {
+            peer->m_package_relay = true;
+        }
+
         pfrom.fSuccessfullyConnected = true;
         return;
     }
@@ -3754,6 +3849,23 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         // save whether peer selects us as BIP152 high-bandwidth peer
         // (receiving sendcmpct(1) signals high-bandwidth, sendcmpct(0) low-bandwidth)
         pfrom.m_bip152_highbandwidth_from = sendcmpct_hb;
+        return;
+    }
+
+    if (msg_type == NetMsgType::SENDPACKAGES) {
+        if (m_opts.m_enable_package_relay) {
+            if (pfrom.fSuccessfullyConnected) {
+                // Disconnect peers that send a SENDPACKAGES message after VERACK
+                LogDebug(BCLog::NET, "sendpackages received after verack from peer=%d; disconnecting\n", pfrom.GetId());
+                pfrom.fDisconnect = true;
+                return;
+            }
+            uint64_t sendpackages_versions;
+            vRecv >> sendpackages_versions;
+            m_txdownloadman.ReceivedSendpackages(peer->m_id, PackageRelayVersions{sendpackages_versions});
+        } else {
+            LogDebug(BCLog::NET, "sendpackages from peer=%d ignored, as our node does not have package relay enabled\n", pfrom.GetId());
+        }
         return;
     }
 
@@ -4751,6 +4863,46 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             LOCK(tx_relay->m_tx_inventory_mutex);
             tx_relay->m_send_mempool = true;
         }
+        return;
+    }
+
+    if (msg_type == NetMsgType::PKGTXNS) {
+        if (RejectIncomingTxs(pfrom)) {
+            LogDebug(BCLog::NET, "pkgtxns sent in violation of protocol, %s", pfrom.DisconnectMsg(fLogIPs));
+            pfrom.fDisconnect = true;
+            return;
+        }
+
+        if (!m_txdownloadman.NodeSupportsVersion(pfrom.GetId(), PKG_RELAY_PKGTXNS)) {
+            LogDebug(BCLog::NET, "\npkgtxns not negotiated, disconnecting peer=%d\n", pfrom.GetId());
+            pfrom.fDisconnect = true;
+            return;
+        }
+
+        unsigned int num_txns = ReadCompactSize(vRecv);
+        if (num_txns == 0) return;
+        if (num_txns > node::MAX_SENDER_INIT_PKG_SIZE) {
+            LogDebug(BCLog::NET, "\npkgtxns exceeds allowed size, disconnecting peer=%d\n", pfrom.GetId());
+            pfrom.fDisconnect = true;
+            return;
+        }
+        std::vector<CTransactionRef> package;
+        package.resize(num_txns);
+        for (unsigned int n = 0; n < num_txns; n++) {
+            vRecv >> TX_WITH_WITNESS(package[n]);
+        }
+
+        const auto package_to_validate(m_txdownloadman.ReceivedPackage(pfrom.GetId(), package));
+
+        if (package_to_validate) {
+            const auto package_result{ProcessNewPackage(m_chainman.ActiveChainstate(), m_mempool, package_to_validate.value().m_txns, /*test_accept=*/false, /*client_maxfeerate=*/std::nullopt)};
+
+            LogDebug(BCLog::TXPACKAGES, "pkgtxns package evaluation for %s: %s\n", package_to_validate->ToString(),
+                     package_result.m_state.IsValid() ? "package accepted" : "package rejected");
+
+            ProcessPackageResult(*package_to_validate, package_result);
+        }
+
         return;
     }
 

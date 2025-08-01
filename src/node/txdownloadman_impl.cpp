@@ -67,6 +67,9 @@ std::pair<bool, std::optional<PackageToValidate>> TxDownloadManager::ReceivedTx(
 {
     return m_impl->ReceivedTx(nodeid, ptx);
 }
+std::optional<PackageToValidate> TxDownloadManager::ReceivedPackage(NodeId nodeid, const Package& package) {
+    return m_impl->ReceivedPackage(nodeid, package);
+}
 bool TxDownloadManager::HaveMoreWork(NodeId nodeid) const
 {
     return m_impl->HaveMoreWork(nodeid);
@@ -88,6 +91,25 @@ std::vector<TxOrphanage::OrphanTxBase> TxDownloadManager::GetOrphanTransactions(
     return m_impl->GetOrphanTransactions();
 }
 
+PackageRelayVersions TxDownloadManager::GetSupportedVersions() const {
+    return m_impl->GetSupportedVersions();
+}
+
+void TxDownloadManager::ReceivedVersion(NodeId nodeid) {
+    m_impl->ReceivedVersion(nodeid);
+}
+
+void TxDownloadManager::ReceivedSendpackages(NodeId nodeid, PackageRelayVersions version) {
+    m_impl->ReceivedSendpackages(nodeid, version);
+}
+
+std::optional<PackageRelayVersions> TxDownloadManager::UpdateRegistrationState(NodeId nodeid, bool txrelay, bool wtxidrelay) {
+    return m_impl->UpdateRegistrationState(nodeid, txrelay, wtxidrelay);
+}
+
+bool TxDownloadManager::NodeSupportsVersion(const NodeId& nodeid, const PackageRelayVersions& versions) {
+    return m_impl->NodeSupportsVersion(nodeid, versions);
+}
 // TxDownloadManagerImpl
 void TxDownloadManagerImpl::ActiveTipChange()
 {
@@ -157,6 +179,10 @@ void TxDownloadManagerImpl::ConnectedPeer(NodeId nodeid, const TxDownloadConnect
 
 void TxDownloadManagerImpl::DisconnectedPeer(NodeId nodeid)
 {
+    if (auto it{m_registration_states.find(nodeid)}; it != m_registration_states.end()) {
+        m_registration_states.erase(it);
+    }
+
     m_orphanage->EraseForPeer(nodeid);
     m_txrequest.DisconnectedPeer(nodeid);
 
@@ -558,6 +584,72 @@ std::pair<bool, std::optional<PackageToValidate>> TxDownloadManagerImpl::Receive
     return {true, std::nullopt};
 }
 
+std::optional<PackageToValidate> TxDownloadManagerImpl::ReceivedPackage(NodeId nodeid, const Package& package)
+{
+    // The child should be the last tx in the package
+    const CTransactionRef& child_tx = package.back();
+    const CTransactionRef& parent_tx = package.front();
+
+    const Txid& child_txid = child_tx->GetHash();
+    const Wtxid& child_wtxid = child_tx->GetWitnessHash();
+
+    const Txid& parent_txid = parent_tx->GetHash();
+    const Wtxid& parent_wtxid = parent_tx->GetWitnessHash();
+
+    // Mark both the parent and the child as received
+    // because we requested the child and may have 
+    // requested the parent
+    m_txrequest.ReceivedResponse(nodeid, child_txid);
+    m_txrequest.ReceivedResponse(nodeid, parent_txid);
+    if (child_tx->HasWitness()) m_txrequest.ReceivedResponse(nodeid, child_wtxid);
+    if (parent_tx->HasWitness()) m_txrequest.ReceivedResponse(nodeid, parent_wtxid);
+
+
+    // check if sending a package was even necessary - only log this so
+    // we don't change behavior yet
+    if (AlreadyHaveTx(parent_wtxid, /*include_reconsiderable=*/false)) {
+        LogDebug(BCLog::TXPACKAGES, "ignoring package, we already have parent: parent %s (wtxid=%s), child %s (wtxid=%s), package hash (%s)\n",
+            parent_tx->GetHash().ToString(), parent_tx->GetWitnessHash().ToString(),
+            child_tx->GetHash().ToString(), child_tx->GetWitnessHash().ToString(),
+            GetPackageHash(package).ToString());
+    }
+
+    // First check if we should drop this tx.
+    // We do the AlreadyHaveTx() check using wtxid, rather than txid - in the
+    // absence of witness malleation, this is strictly better, because the
+    // recent rejects filter may contain the wtxid but rarely contains
+    // the txid of a segwit transaction that has been rejected.
+    // In the presence of witness malleation, it's possible that by only
+    // doing the check with wtxid, we could overlook a transaction which
+    // was confirmed with a different witness, or exists in our mempool
+    // with a different witness, but this has limited downside:
+    // mempool validation does its own lookup of whether we have the txid
+    // already; and an adversary can already relay us old transactions
+    // (older than our recency filter) if trying to DoS us, without any need
+    // for witness malleation.
+    if (AlreadyHaveTx(child_wtxid, /*include_reconsiderable=*/false)) {
+        LogDebug(BCLog::TXPACKAGES, "ignoring package, we already have child: parent %s (wtxid=%s), child %s (wtxid=%s), package hash (%s)\n",
+            parent_tx->GetHash().ToString(), parent_tx->GetWitnessHash().ToString(),
+            child_tx->GetHash().ToString(), child_tx->GetWitnessHash().ToString(),
+            GetPackageHash(package).ToString());
+        return std::nullopt;
+    } else if (RecentRejectsReconsiderableFilter().contains(GetPackageHash(package))) {
+        LogDebug(BCLog::TXPACKAGES, "ignoring package we previously rejected: parent %s (wtxid=%s), child %s (wtxid=%s), package hash (%s)\n",
+            parent_tx->GetHash().ToString(), parent_tx->GetWitnessHash().ToString(),
+            child_tx->GetHash().ToString(), child_tx->GetWitnessHash().ToString(),
+            GetPackageHash(package).ToString());
+        return std::nullopt;
+    } else if (RecentRejectsFilter().contains(parent_wtxid.ToUint256())) {
+        LogDebug(BCLog::TXPACKAGES, "dropping package with parent that has already been rejected and is not eligible for reconsideration: parent %s (wtxid=%s), child %s (wtxid=%s), package hash (%s)\n",
+            parent_tx->GetHash().ToString(), parent_tx->GetWitnessHash().ToString(),
+            child_tx->GetHash().ToString(), child_tx->GetWitnessHash().ToString(),
+            GetPackageHash(package).ToString());
+        return std::nullopt;
+    }
+
+    return PackageToValidate(parent_tx, child_tx, nodeid);
+}
+
 bool TxDownloadManagerImpl::HaveMoreWork(NodeId nodeid)
 {
     return m_orphanage->HaveTxToReconsider(nodeid);
@@ -583,5 +675,44 @@ void TxDownloadManagerImpl::CheckIsEmpty()
 std::vector<TxOrphanage::OrphanTxBase> TxDownloadManagerImpl::GetOrphanTransactions() const
 {
     return m_orphanage->GetOrphanTransactions();
+}
+
+PackageRelayVersions TxDownloadManagerImpl::GetSupportedVersions() const {
+    return PKG_RELAY_PKGTXNS;
+}
+
+void TxDownloadManagerImpl::ReceivedVersion(NodeId nodeid) {
+    if (m_registration_states.find(nodeid) != m_registration_states.end()) return;
+    m_registration_states.insert(std::make_pair(nodeid, RegistrationState{}));
+}
+
+void TxDownloadManagerImpl::ReceivedSendpackages(NodeId nodeid, PackageRelayVersions version) {
+    const auto it = m_registration_states.find(nodeid);
+    if (it == m_registration_states.end()) return;
+    it->second.m_sendpackages_received = true;
+    // Ignore versions we don't understand. Relay packages of versions that we both support.
+    it->second.m_versions_in_common = PackageRelayVersions(GetSupportedVersions() & version);
+}
+
+std::optional<PackageRelayVersions> TxDownloadManagerImpl::UpdateRegistrationState(NodeId nodeid, bool txrelay, bool wtxidrelay) {
+    const auto& it = m_registration_states.find(nodeid);
+    if (it == m_registration_states.end()) return std::nullopt;
+    it->second.m_txrelay = txrelay;
+    it->second.m_wtxid_relay = wtxidrelay;
+    const bool final_state = it->second.CanRelayPackages();
+    const PackageRelayVersions& version = it->second.m_versions_in_common;
+    m_registration_states.erase(it);
+    if (final_state) {
+        m_package_relay_versions.insert(std::make_pair(nodeid, version));
+        return version;
+    }
+    return std::nullopt;
+}
+bool TxDownloadManagerImpl::NodeSupportsVersion(const NodeId& nodeid, const PackageRelayVersions& versions) {
+    auto node_versions = m_package_relay_versions.find(nodeid);
+    if (m_package_relay_versions.find(nodeid) != m_package_relay_versions.end()) {
+        return node_versions->second & versions;
+    }
+    return false;
 }
 } // namespace node
