@@ -31,13 +31,13 @@ from test_framework.mempool_util import (
     TRUC_CHILD_MAX_VSIZE,
 )
 
+# sweep alice and bob's wallets and clear the mempool
 def cleanup(func):
     def wrapper(self, *args):
         try:
             self.generate(self.nodes[0], 1)
             func(self, *args)
         finally:
-            self.sync_mempools()
             self.generate(self.nodes[0], 1)
             try:
                 self.alice.sendall([self.charlie.getnewaddress()])
@@ -47,14 +47,13 @@ def cleanup(func):
                 self.bob.sendall([self.charlie.getnewaddress()])
             except JSONRPCException as e:
                 assert "Total value of UTXO pool too low to pay for transaction" in e.error['message']
-            self.sync_mempools()
             self.generate(self.nodes[0], 1)
-            assert_equal(0, self.alice.getbalances()["mine"]["untrusted_pending"])
-            assert_equal(0, self.bob.getbalances()["mine"]["untrusted_pending"])
-            assert_equal(0, self.alice.getbalances()["mine"]["trusted"])
-            assert_equal(0, self.bob.getbalances()["mine"]["trusted"])
-            assert_equal(0, self.alice.getbalances()["mine"]["immature"])
-            assert_equal(0, self.bob.getbalances()["mine"]["immature"])
+
+            for wallet in [self.alice, self.bob]:
+                balance = wallet.getbalances()["mine"]
+                for balance_type in ["untrusted_pending", "trusted", "immature"]:
+                    assert_equal(balance[balance_type], 0)
+
             assert_equal(self.alice.getrawmempool(), [])
             assert_equal(self.bob.getrawmempool(), [])
 
@@ -68,16 +67,13 @@ class WalletV3Test(BitcoinTestFramework):
         getcontext().prec=10
         self.num_nodes = 1
         self.setup_clean_chain = True
-        # whitelist peers to speed up tx relay / mempool sync
-        self.noban_tx_relay = True
 
-    def send_tx(self, from_node, inputs, outputs, version):
-        raw_tx = from_node.createrawtransaction(inputs=inputs, outputs=outputs, version=version)
+    def send_tx(self, from_wallet, inputs, outputs, version):
+        raw_tx = from_wallet.createrawtransaction(inputs=inputs, outputs=outputs, version=version)
         if inputs == []:
-            raw_tx = from_node.fundrawtransaction(raw_tx, {'include_unsafe' : True})["hex"]
-        raw_tx = from_node.signrawtransactionwithwallet(raw_tx)["hex"]
-        txid = from_node.sendrawtransaction(raw_tx)
-        self.sync_mempools()
+            raw_tx = from_wallet.fundrawtransaction(raw_tx, {'include_unsafe' : True})["hex"]
+        raw_tx = from_wallet.signrawtransactionwithwallet(raw_tx)["hex"]
+        txid = from_wallet.sendrawtransaction(raw_tx)
         return txid
 
     def bulk_tx(self, tx, amount, target_vsize):
@@ -121,10 +117,12 @@ class WalletV3Test(BitcoinTestFramework):
         self.walletcreatefundedpsbt_v3()
         self.sendall_truc_weight_limit()
         self.sendall_truc_child_weight_limit()
+        self.mix_non_truc_versions()
+        self.cant_spend_multiple_unconfirmed_truc_outputs()
 
     @cleanup
     def tx_spends_unconfirmed_tx_with_wrong_version(self, version_a, version_b):
-        self.log.info(f"Test unavailable funds when v{version_a} tx spends unconfirmed v{version_b} tx")
+        self.log.info(f"Test unavailable funds when v{version_b} tx spends unconfirmed v{version_a} tx")
 
         outputs = {self.bob.getnewaddress() : 2.0}
         self.send_tx(self.charlie, [], outputs, version_a)
@@ -145,7 +143,7 @@ class WalletV3Test(BitcoinTestFramework):
 
     @cleanup
     def va_tx_spends_confirmed_vb_tx(self, version_a, version_b):
-        self.log.info(f"Test available funds when v{version_a} tx spends confirmed v{version_b} tx")
+        self.log.info(f"Test available funds when v{version_b} tx spends confirmed v{version_a} tx")
 
         outputs = {self.bob.getnewaddress() : 2.0}
         self.send_tx(self.charlie, [], outputs, version_a)
@@ -169,9 +167,9 @@ class WalletV3Test(BitcoinTestFramework):
 
     @cleanup
     def truc_tx_with_conflicting_sibling(self):
-        # unconfirmed v3 tx to alice & bob
         self.log.info("Test v3 transaction with conflicting sibling")
 
+        # unconfirmed v3 tx to alice & bob
         outputs = {self.alice.getnewaddress() : 2.0, self.bob.getnewaddress() : 2.0}
         self.send_tx(self.charlie, [], outputs, 3)
 
@@ -193,14 +191,14 @@ class WalletV3Test(BitcoinTestFramework):
 
     @cleanup
     def truc_tx_with_conflicting_sibling_change(self):
-        # unconfirmed v3 tx to alice & bob
-        self.log.info("Test v3 transaction with conflicting sibling")
+        self.log.info("Test v3 transaction with conflicting sibling change")
 
         outputs = {self.alice.getnewaddress() : 8.0}
         self.send_tx(self.charlie, [], outputs, 3)
 
         self.generate(self.nodes[0], 1)
 
+        # unconfirmed v3 tx to alice & bob
         outputs = {self.alice.getnewaddress() : 2.0, self.bob.getnewaddress() : 2.0}
         self.send_tx(self.alice, [], outputs, 3)
 
@@ -241,7 +239,7 @@ class WalletV3Test(BitcoinTestFramework):
 
     @cleanup
     def spend_inputs_with_different_versions_default_version(self):
-        self.log.info("Test spending a pre-selected v3 input with a v2 transaction")
+        self.log.info("Test spending a pre-selected v3 input with the default version of transaction")
 
         outputs = {self.alice.getnewaddress() : 2.0}
         self.send_tx(self.charlie, [], outputs, 3)
@@ -260,15 +258,16 @@ class WalletV3Test(BitcoinTestFramework):
 
     @cleanup
     def v3_tx_evicted_from_mempool_by_sibling(self):
-        # unconfirmed v3 tx to alice & bob
-        self.log.info("Test v3 transaction with conflicting sibling")
+        self.log.info("Test v3 transaction evicted because of conflicting sibling")
 
+        # unconfirmed v3 tx to alice & bob
         outputs = {self.alice.getnewaddress() : 2.0, self.bob.getnewaddress() : 2.0}
         self.send_tx(self.charlie, [], outputs, 3)
 
         # alice spends her output with a v3 transaction
         alice_unspent = self.alice.listunspent(minconf=0)[0]
-        outputs = {self.alice.getnewaddress() : alice_unspent['amount'] - Decimal(0.00000120)}
+        alice_fee = Decimal(0.00000120)
+        outputs = {self.alice.getnewaddress() : alice_unspent['amount'] - alice_fee}
         alice_txid = self.send_tx(self.alice, [alice_unspent], outputs, 3)
 
         # bob tries to spend money
@@ -279,7 +278,8 @@ class WalletV3Test(BitcoinTestFramework):
         assert_equal(self.alice.gettransaction(alice_txid)['mempoolconflicts'], [bob_txid])
 
         self.log.info("Test that re-submitting Alice's transaction with a higher fee removes bob's tx as a mempool conflict")
-        outputs = {self.alice.getnewaddress() : alice_unspent['amount'] - Decimal(0.00030120)}
+        fee_delta = Decimal(0.00030120)
+        outputs = {self.alice.getnewaddress() : alice_unspent['amount'] - fee_delta}
         alice_txid = self.send_tx(self.alice, [alice_unspent], outputs, 3)
         assert_equal(self.alice.gettransaction(alice_txid)['mempoolconflicts'], [])
 
@@ -319,6 +319,7 @@ class WalletV3Test(BitcoinTestFramework):
 
     @cleanup
     def mempool_conflicts_removed_when_v3_conflict_removed(self):
+        self.log.info("Test that we remove v3 txs from mempool_conflicts correctly")
         # send a v2 output to alice and confirm it
         txid = self.charlie.sendall([self.alice.getnewaddress()])["txid"]
         assert_equal(self.charlie.gettransaction(txid, verbose=True)["decoded"]["version"], 2)
@@ -336,14 +337,15 @@ class WalletV3Test(BitcoinTestFramework):
         # alice spends both of her utxos, replacing bob's tx
         outputs = {self.charlie.getnewaddress() : alice_v2_unspent['amount'] + alice_unspent['amount'] - Decimal(0.00005120)}
         alice_txid = self.send_tx(self.alice, [alice_v2_unspent, alice_unspent], outputs, 3)
-        self.sync_mempools()
         # bob's tx now has a mempool conflict
         assert_equal(self.bob.gettransaction(bob_txid)['mempoolconflicts'], [alice_txid])
         # alice fee-bumps her tx so it only spends the v2 utxo
         outputs = {self.charlie.getnewaddress() : alice_v2_unspent['amount'] - Decimal(0.00015120)}
         self.send_tx(self.alice, [alice_v2_unspent], outputs, 2)
         # bob's tx now has non conflicts and can be rebroadcast
-        assert_equal(self.bob.gettransaction(bob_txid)['mempoolconflicts'], [])
+        bob_tx = self.bob.gettransaction(bob_txid)
+        assert_equal(bob_tx['mempoolconflicts'], [])
+        self.bob.sendrawtransaction(bob_tx['hex'])
 
     @cleanup
     def max_tx_weight(self):
@@ -455,35 +457,30 @@ class WalletV3Test(BitcoinTestFramework):
     def sendall_with_unconfirmed_v3(self):
         self.log.info("Test setting version to 3 with sendall + unconfirmed inputs")
 
-        outputs = {}
-        for _ in range(4):
-            outputs[self.alice.getnewaddress()] = 2.00001
+        outputs = {self.alice.getnewaddress(): 2.00001 for _ in range(4)}
 
         self.send_tx(self.charlie, [], outputs, 2)
         self.generate(self.nodes[0], 1)
 
-        unspent1 = self.alice.listunspent()[0]
-        unspent2 = self.alice.listunspent()[1]
-        unspent3 = self.alice.listunspent()[2]
-        unspent4 = self.alice.listunspent()[3]
+        unspents = self.alice.listunspent()
 
         # confirmed v2 utxos
         outputs = {self.alice.getnewaddress() : 2.0}
-        confirmed_v2 = self.send_tx(self.alice, [unspent1], outputs, 2)
+        confirmed_v2 = self.send_tx(self.alice, [unspents[0]], outputs, 2)
 
         # confirmed v3 utxos
         outputs = {self.alice.getnewaddress() : 2.0}
-        confirmed_v3 = self.send_tx(self.alice, [unspent2], outputs, 3)
+        confirmed_v3 = self.send_tx(self.alice, [unspents[1]], outputs, 3)
 
         self.generate(self.nodes[0], 1)
 
         # unconfirmed v2 utxos
         outputs = {self.alice.getnewaddress() : 2.0}
-        unconfirmed_v2 = self.send_tx(self.alice, [unspent3], outputs, 2)
+        unconfirmed_v2 = self.send_tx(self.alice, [unspents[2]], outputs, 2)
 
         # unconfirmed v3 utxos
         outputs = {self.alice.getnewaddress() : 2.0}
-        unconfirmed_v3 = self.send_tx(self.alice, [unspent4], outputs, 3)
+        unconfirmed_v3 = self.send_tx(self.alice, [unspents[3]], outputs, 3)
 
         # Test that the only unconfirmed inputs this v3 tx spends are v3
         tx_hex = self.alice.sendall([self.bob.getnewaddress()], version=3, add_to_wallet=False, minconf=0)["hex"]
@@ -548,6 +545,36 @@ class WalletV3Test(BitcoinTestFramework):
                 [self.alice.getnewaddress() for _ in range(50)],
                 version=3
             )
+
+    @cleanup
+    def mix_non_truc_versions(self):
+        self.log.info(f"Test that we can mix non-truc versions when spending an unconfirmed output")
+
+        outputs = {self.bob.getnewaddress() : 2.0}
+        self.send_tx(self.charlie, [], outputs, 1)
+
+        assert_equal(self.bob.getbalances()["mine"]["trusted"], 0)
+        assert_greater_than(self.bob.getbalances()["mine"]["untrusted_pending"], 0)
+
+        outputs = {self.alice.getnewaddress() : 1.0}
+
+        raw_tx_v2 = self.bob.createrawtransaction(inputs=[], outputs=outputs, version=2)
+
+        # does not throw an error
+        bob_hex = self.bob.fundrawtransaction(raw_tx_v2, {'include_unsafe': True})["hex"]
+    
+    @cleanup
+    def cant_spend_multiple_unconfirmed_truc_outputs(self):
+        self.log.info("Test that we can't spend multiple unconfirmed truc outputs")
+
+        outputs = {self.alice.getnewaddress(): 2.00001}
+        self.send_tx(self.charlie, [], outputs, 3)
+        self.send_tx(self.charlie, [], outputs, 3)
+
+        assert_equal(len(self.alice.listunspent(minconf=0)), 2)
+
+        outputs = {self.bob.getnewaddress() : 3.0}
+        txid = self.send_tx(self.alice, [], outputs, 3)
 
 if __name__ == '__main__':
     WalletV3Test(__file__).main()
