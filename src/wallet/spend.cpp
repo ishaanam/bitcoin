@@ -325,6 +325,9 @@ CoinsResult AvailableCoins(const CWallet& wallet,
     AssertLockHeld(wallet.cs_wallet);
 
     CoinsResult result;
+    // track unconfirmed truc outputs separately if we are tracking trucness
+    CoinsResult unconfirmed_truc_coins;
+    std::unordered_map<uint256, CAmount, SaltedTxidHasher> truc_txid_by_value;
     // Either the WALLET_FLAG_AVOID_REUSE flag is not set (in which case we always allow), or we default to avoiding, and only in the case where
     // a coin control object is provided, and has the avoid address reuse flag set to false, do we allow already used addresses
     bool allow_used_addresses = !wallet.IsWalletFlagSet(WALLET_FLAG_AVOID_REUSE) || (coinControl && !coinControl->m_avoid_address_reuse);
@@ -470,8 +473,18 @@ CoinsResult AvailableCoins(const CWallet& wallet,
             is_from_p2sh = true;
         }
 
-        result.Add(GetOutputType(type, is_from_p2sh),
-                   COutput(outpoint, output, nDepth, input_bytes, spendable, solvable, tx_safe, wtx.GetTxTime(), tx_from_me, feerate));
+        if (wtx.tx->version == TRUC_VERSION && nDepth == 0 && params.check_version_trucness) {
+            unconfirmed_truc_coins.Add(GetOutputType(type, is_from_p2sh),
+                       COutput(outpoint, output, nDepth, input_bytes, spendable, solvable, tx_safe, wtx.GetTxTime(), tx_from_me, feerate));
+            if (truc_txid_by_value.find(wtx.tx->GetHash()) == truc_txid_by_value.end()) {
+                truc_txid_by_value[wtx.tx->GetHash()] = output.nValue;
+            } else {
+                truc_txid_by_value[wtx.tx->GetHash()] += output.nValue;
+            }
+        } else {
+            result.Add(GetOutputType(type, is_from_p2sh),
+                       COutput(outpoint, output, nDepth, input_bytes, spendable, solvable, tx_safe, wtx.GetTxTime(), tx_from_me, feerate));
+        }
 
         outpoints.push_back(outpoint);
 
@@ -485,6 +498,21 @@ CoinsResult AvailableCoins(const CWallet& wallet,
         // Checks the maximum number of UTXO's.
         if (params.max_count > 0 && result.Size() >= params.max_count) {
             return result;
+        }
+    }
+
+    if (params.check_version_trucness && unconfirmed_truc_coins.Size() > 0) {
+        auto highest_value_truc_tx = std::max_element(truc_txid_by_value.begin(), truc_txid_by_value.end(), [](const auto& tx1, const auto& tx2){
+                return tx1.second < tx2.second;
+                });
+
+        const uint256& truc_txid = highest_value_truc_tx->first;
+        for (const auto& [type, outputs] : unconfirmed_truc_coins.coins) {
+            for (const COutput& output : outputs) {
+                if (output.outpoint.hash == truc_txid) {
+                        result.Add(type, output);
+                }
+            }
         }
     }
 
