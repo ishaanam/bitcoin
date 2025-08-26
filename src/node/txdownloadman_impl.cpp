@@ -67,6 +67,9 @@ std::pair<bool, std::optional<PackageToValidate>> TxDownloadManager::ReceivedTx(
 {
     return m_impl->ReceivedTx(nodeid, ptx);
 }
+std::optional<PackageToValidate> TxDownloadManager::ReceivedPackage(NodeId nodeid, Package& package) {
+    return m_impl->ReceivedPackage(nodeid, package);
+}
 bool TxDownloadManager::HaveMoreWork(NodeId nodeid) const
 {
     return m_impl->HaveMoreWork(nodeid);
@@ -88,6 +91,25 @@ std::vector<TxOrphanage::OrphanTxBase> TxDownloadManager::GetOrphanTransactions(
     return m_impl->GetOrphanTransactions();
 }
 
+PackageRelayVersions TxDownloadManager::GetSupportedVersions() const {
+    return m_impl->GetSupportedVersions();
+}
+
+void TxDownloadManager::ReceivedVersion(NodeId nodeid) {
+    m_impl->ReceivedVersion(nodeid);
+}
+
+void TxDownloadManager::ReceivedSendpackages(NodeId nodeid, PackageRelayVersions version) {
+    m_impl->ReceivedSendpackages(nodeid, version);
+}
+
+std::optional<PackageRelayVersions> TxDownloadManager::UpdateRegistrationState(NodeId nodeid, bool txrelay, bool wtxidrelay) {
+    return m_impl->UpdateRegistrationState(nodeid, txrelay, wtxidrelay);
+}
+
+bool TxDownloadManager::NodeSupportsVersion(const NodeId& nodeid, const PackageRelayVersions& versions) {
+    return m_impl->NodeSupportsVersion(nodeid, versions);
+}
 // TxDownloadManagerImpl
 void TxDownloadManagerImpl::ActiveTipChange()
 {
@@ -157,6 +179,10 @@ void TxDownloadManagerImpl::ConnectedPeer(NodeId nodeid, const TxDownloadConnect
 
 void TxDownloadManagerImpl::DisconnectedPeer(NodeId nodeid)
 {
+    if (auto it{m_registration_states.find(nodeid)}; it != m_registration_states.end()) {
+        m_registration_states.erase(it);
+    }
+
     m_orphanage->EraseForPeer(nodeid);
     m_txrequest.DisconnectedPeer(nodeid);
 
@@ -558,6 +584,56 @@ std::pair<bool, std::optional<PackageToValidate>> TxDownloadManagerImpl::Receive
     return {true, std::nullopt};
 }
 
+std::optional<PackageToValidate> TxDownloadManagerImpl::ReceivedPackage(NodeId nodeid, Package& mutable_package)
+{
+    // Don't validate a package that is too large
+    if (mutable_package.size() > MAX_SENDER_INIT_PKG_SIZE) return std::nullopt;
+
+    std::string package_string = strprintf("package hash: %s, parent (txid=%s, wtxid=%s) + child (txid=%s, wtxid=%s)",
+            GetPackageHash(mutable_package).ToString(),
+            mutable_package.front()->GetHash().ToString(),
+            mutable_package.front()->GetWitnessHash().ToString(),
+            mutable_package.back()->GetHash().ToString(),
+            mutable_package.back()->GetWitnessHash().ToString()
+            );
+
+    // If we recently rejected this package, don't validate it again
+    if (RecentRejectsReconsiderableFilter().contains(GetPackageHash(mutable_package))) {
+        LogDebug(BCLog::TXPACKAGES, "ignoring package we previously rejected: %s\n", package_string);
+        return std::nullopt;
+    }
+
+    // We may remove certain transaction from the package that we already
+    // know about or that were recently rejected
+    for (size_t i = 0; i < mutable_package.size(); i++) {
+
+        const CTransactionRef& tx = mutable_package.at(i);
+        const Txid& txid = tx->GetHash();
+        const Wtxid& wtxid = tx->GetWitnessHash();
+
+        m_txrequest.ReceivedResponse(nodeid, txid);
+        if (tx->HasWitness()) m_txrequest.ReceivedResponse(nodeid, wtxid);
+
+        // Always check by wtxid and not txid
+        if (AlreadyHaveTx(wtxid, /*include_reconsiderable=*/false)) {
+            LogDebug(BCLog::TXPACKAGES, "removing tx (%s) from the following package because we already have it: %s\n", txid.ToString(), package_string);
+            mutable_package.erase(mutable_package.begin()+i);
+        } else if (RecentRejectsFilter().contains(wtxid.ToUint256())) {
+            LogDebug(BCLog::TXPACKAGES, "dropping package because tx (%s) has already been rejected and is not eligible for reconsideration: %s\n", txid.ToString(), package_string);
+            mutable_package.erase(mutable_package.begin()+i);
+        }
+    }
+
+    // If we recently rejected this package, don't validate it again
+    if (RecentRejectsReconsiderableFilter().contains(GetPackageHash(mutable_package))) return std::nullopt;
+
+    if (mutable_package.size() > 0) {
+        return PackageToValidate(mutable_package, nodeid);
+    }
+
+    return std::nullopt;
+}
+
 bool TxDownloadManagerImpl::HaveMoreWork(NodeId nodeid)
 {
     return m_orphanage->HaveTxToReconsider(nodeid);
@@ -583,5 +659,44 @@ void TxDownloadManagerImpl::CheckIsEmpty()
 std::vector<TxOrphanage::OrphanTxBase> TxDownloadManagerImpl::GetOrphanTransactions() const
 {
     return m_orphanage->GetOrphanTransactions();
+}
+
+PackageRelayVersions TxDownloadManagerImpl::GetSupportedVersions() const {
+    return PKG_RELAY_PKGTXNS;
+}
+
+void TxDownloadManagerImpl::ReceivedVersion(NodeId nodeid) {
+    if (m_registration_states.find(nodeid) != m_registration_states.end()) return;
+    m_registration_states.insert(std::make_pair(nodeid, RegistrationState{}));
+}
+
+void TxDownloadManagerImpl::ReceivedSendpackages(NodeId nodeid, PackageRelayVersions version) {
+    const auto it = m_registration_states.find(nodeid);
+    if (it == m_registration_states.end()) return;
+    it->second.m_sendpackages_received = true;
+    // Ignore versions we don't understand. Relay packages of versions that we both support.
+    it->second.m_versions_in_common = PackageRelayVersions(GetSupportedVersions() & version);
+}
+
+std::optional<PackageRelayVersions> TxDownloadManagerImpl::UpdateRegistrationState(NodeId nodeid, bool txrelay, bool wtxidrelay) {
+    const auto& it = m_registration_states.find(nodeid);
+    if (it == m_registration_states.end()) return std::nullopt;
+    it->second.m_txrelay = txrelay;
+    it->second.m_wtxid_relay = wtxidrelay;
+    const bool final_state = it->second.CanRelayPackages();
+    PackageRelayVersions version = it->second.m_versions_in_common;
+    m_registration_states.erase(it);
+    if (final_state) {
+        m_package_relay_versions.insert(std::make_pair(nodeid, version));
+        return version;
+    }
+    return std::nullopt;
+}
+bool TxDownloadManagerImpl::NodeSupportsVersion(const NodeId& nodeid, const PackageRelayVersions& versions) {
+    auto node_versions = m_package_relay_versions.find(nodeid);
+    if (m_package_relay_versions.find(nodeid) != m_package_relay_versions.end()) {
+        return node_versions->second & versions;
+    }
+    return false;
 }
 } // namespace node
